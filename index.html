@@ -301,9 +301,10 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
     </div>
   </div>
   <div class="tip blue" style="margin-top:8px">
-    <b>Lookup strategy:</b> Built-in table of 600+ NSE stocks (instant, no network) → tries live NSE CSV → Yahoo Finance via corsproxy for remaining.<br>
-    <b>For stocks showing "need proxy"</b> (BSE-only / very small caps): Register free at <b>corsproxy.io</b> → Add domain → enter <code>investments-ag4n.onrender.com</code>.<br>
-    <b>Is corsproxy.io safe?</b> Yes for this use case. It's a public CORS proxy service — it forwards your <i>requests</i> to Yahoo Finance and adds CORS headers to the response. No login, no personal data stored. It cannot see your Box credentials (those go directly from browser to Box). You're just using it to work around browser security rules for public financial data.<br>
+    <b>Lookup strategy (no proxy needed):</b><br>
+    Step 1: Built-in table of 600+ NSE stocks — instant, covers most retail portfolios.<br>
+    Step 2: Yahoo Finance search API called directly from your browser (no proxy) for remaining stocks.<br>
+    Step 3: If a stock still shows <b>?</b>, enter the Yahoo symbol manually (e.g. <code>HDFCBANK.NS</code> for NSE, <code>HDFCBANK.BO</code> for BSE).<br>
     <b>💾 Save to Box</b> saves to <code>Investments/isin_map.json</code> — loads on every visit. Without it, data is browser-only.
   </div>
 </div>
@@ -334,7 +335,8 @@ const BOX_API='https://api.box.com/2.0';
 const BOX_UP='https://upload.box.com/api/2.0';
 const REDIRECT=location.origin+location.pathname;
 const FOLDER='Investments';
-const YFP='https://corsproxy.io/?';
+const YF1='https://query1.finance.yahoo.com';
+const YF2='https://query2.finance.yahoo.com';
 
 // ── State ───────────────────────────────────────────────────
 let bToken=null,fId=null;
@@ -447,11 +449,22 @@ function toYF(scrip){
   return k.replace(/\s+/g,'').replace(/[^A-Z0-9&]/g,'')+'.NS';
 }
 async function fetchYF(sym){
-  const r=await fetch(YFP+encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?range=7y&interval=1mo`));
-  const d=await r.json();const res=d.chart?.result?.[0];if(!res)return null;
-  const ts=res.timestamp,cl=res.indicators.quote[0].close,hist={};
-  ts.forEach((t,i)=>{if(cl[i]!=null){const m=new Date(t*1000).toISOString().slice(0,7);hist[m]=cl[i];}});
-  return{current:cl.filter(Boolean).pop(),history:hist,updated:new Date().toISOString()};
+  // Yahoo Finance chart API serves Access-Control-Allow-Origin: * — no proxy needed
+  const endpoints=[
+    `${YF1}/v8/finance/chart/${encodeURIComponent(sym)}?range=7y&interval=1mo`,
+    `${YF2}/v8/finance/chart/${encodeURIComponent(sym)}?range=7y&interval=1mo`,
+  ];
+  for(const url of endpoints){
+    try{
+      const r=await fetch(url,{signal:AbortSignal.timeout(10000)});
+      if(!r.ok)continue;
+      const d=await r.json();const res=d.chart?.result?.[0];if(!res)continue;
+      const ts=res.timestamp,cl=res.indicators.quote[0].close,hist={};
+      ts.forEach((t,i)=>{if(cl[i]!=null){const m=new Date(t*1000).toISOString().slice(0,7);hist[m]=cl[i];}});
+      return{current:cl.filter(Boolean).pop(),history:hist,updated:new Date().toISOString()};
+    }catch{}
+  }
+  return null;
 }
 async function refreshPrices(){
   if(!bToken){toast('Connect Box first','error');return;}
@@ -1035,31 +1048,28 @@ async function loadNSEMaster(){
   const NSE_CSV='https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv';
   const prog=document.getElementById('lookup-progress');
   if(prog)prog.textContent='Using built-in NSE master (600+ stocks). Trying to fetch full NSE list…';
-  const attempts=[
-    ()=>fetch(NSE_CSV,{headers:{'Referer':'https://www.nseindia.com','Accept':'text/html,*/*'}}),
-    ()=>fetch('https://corsproxy.io/?'+encodeURIComponent(NSE_CSV)),
-  ];
-  for(const attempt of attempts){
-    try{
-      const r=await attempt();
-      if(!r.ok)continue;
+  // Try NSE directly — works if NSE allows the request, silently skipped if blocked
+  try{
+    const r=await fetch(NSE_CSV,{headers:{'Referer':'https://www.nseindia.com'},signal:AbortSignal.timeout(8000)});
+    if(r.ok){
       const text=await r.text();
-      if(!text.includes('SYMBOL'))continue;
-      const liveMap={};
-      text.split('\n').slice(1).forEach(line=>{
-        const cols=line.split(',');
-        const sym=(cols[0]||'').trim().replace(/['"]/g,'');
-        const isin=(cols[6]||'').trim().replace(/['"]/g,'');
-        if(sym&&isin&&/^IN/.test(isin))liveMap[isin]=sym;
-      });
-      if(Object.keys(liveMap).length>100){
-        nseMasterCache={...nseMasterCache,...liveMap};
-        if(prog)prog.textContent=`NSE master: ${Object.keys(nseMasterCache).length} stocks (live + built-in).`;
+      if(text.includes('SYMBOL')){
+        const liveMap={};
+        text.split('\n').slice(1).forEach(line=>{
+          const cols=line.split(',');
+          const sym=(cols[0]||'').trim().replace(/['"]/g,'');
+          const isin=(cols[6]||'').trim().replace(/['"]/g,'');
+          if(sym&&isin&&/^IN/.test(isin))liveMap[isin]=sym;
+        });
+        if(Object.keys(liveMap).length>100){
+          nseMasterCache={...nseMasterCache,...liveMap};
+          if(prog)prog.textContent=`NSE master: ${Object.keys(nseMasterCache).length} stocks (live + built-in).`;
+          return nseMasterCache;
+        }
       }
-      return nseMasterCache;
-    }catch{}
-  }
-  if(prog)prog.textContent=`Using built-in NSE master: ${Object.keys(nseMasterCache).length} stocks.`;
+    }
+  }catch{}
+  if(prog)prog.textContent=`Using built-in master: ${Object.keys(nseMasterCache).length} stocks.`;
   return nseMasterCache;
 }
 
@@ -1084,6 +1094,7 @@ async function lookupAllISINs(forceAll=false){
   }
   saveISINLocal(); renderISIN();
 
+  // Step 2: For stocks not in NSE master, try Yahoo Finance search directly (no proxy)
   const remaining=toLookup.filter(r=>r.status==='not-nse');
   if(!remaining.length){
     prog.style.display='none'; btn.disabled=false;
@@ -1091,41 +1102,31 @@ async function lookupAllISINs(forceAll=false){
     return;
   }
 
-  // Step 2: For unlisted/BSE stocks, try Yahoo Finance via corsproxy
-  prog.textContent=`${remaining.length} stocks not in NSE master. Testing proxy…`;
-  let proxyWorks=false;
-  try{
-    const testR=await fetch('https://corsproxy.io/?'+encodeURIComponent('https://query2.finance.yahoo.com/v1/finance/search?q=RELIANCE&quotesCount=1&newsCount=0'),{signal:AbortSignal.timeout(5000)});
-    if(testR.ok){const td=await testR.json();proxyWorks=(td.quotes||[]).length>0;}
-  }catch{}
-
-  if(proxyWorks){
-    let done=0;
-    for(const r of remaining){
-      prog.textContent=`[${++done}/${remaining.length}] Yahoo: ${r.isin} (${r.scrip})…`;
+  prog.textContent=`${remaining.length} not in NSE master. Trying Yahoo Finance search…`;
+  let done=0;
+  for(const r of remaining){
+    prog.textContent=`[${++done}/${remaining.length}] Yahoo search: ${r.scrip||r.isin}…`;
+    // Try Yahoo Finance search directly — serves CORS headers for search too
+    let found=false;
+    for(const base of[YF2,YF1]){
       try{
-        const url=`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`;
-        const res=await fetch('https://corsproxy.io/?'+encodeURIComponent(url),{signal:AbortSignal.timeout(8000)});
-        if(!res.ok){r.status='proxy-err';fail++;continue;}
+        const url=`${base}/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`;
+        const res=await fetch(url,{signal:AbortSignal.timeout(8000)});
+        if(!res.ok)continue;
         const d=await res.json();
         const quotes=(d.quotes||[]).filter(q=>q.quoteType==='EQUITY');
         const ns=quotes.find(q=>q.symbol?.endsWith('.NS'));
         const bs=quotes.find(q=>q.symbol?.endsWith('.BO'));
         const best=ns||bs||quotes[0];
-        if(best?.symbol){r.yahoo=best.symbol;r.nse=ns?ns.symbol.replace('.NS',''):'';r.status='✓';ok++;}
-        else{r.status='?';fail++;}
-      }catch{r.status='err';fail++;}
-      saveISINLocal(); renderISIN();
-      await new Promise(res=>setTimeout(res,350));
+        if(best?.symbol){r.yahoo=best.symbol;r.nse=ns?ns.symbol.replace('.NS',''):'';r.status='✓';ok++;found=true;break;}
+      }catch{}
     }
-  }else{
-    remaining.forEach(r=>{r.status='no-proxy';fail++;});
-    prog.textContent=`${remaining.length} stocks need proxy. Register domain at corsproxy.io (free) — see tip below.`;
-    setTimeout(()=>prog.style.display='none',8000);
+    if(!found){r.status='?';fail++;}
+    saveISINLocal(); renderISIN();
+    await new Promise(res=>setTimeout(res,300));
   }
 
-  btn.disabled=false;
-  if(proxyWorks)prog.style.display='none';
+  prog.style.display='none'; btn.disabled=false;
   saveISINLocal(); renderISIN();
   toast(`Done: ${ok} found, ${fail} need manual entry or proxy`,ok>0?'ok':'info',6000);
 }
