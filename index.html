@@ -1118,14 +1118,6 @@ async function lookupAllISINs(forceAll=false){
   }
   saveISINLocal(); renderISIN();
 
-  // Step 2: For stocks not in NSE master, try Yahoo Finance search directly (no proxy)
-  const remaining=toLookup.filter(r=>r.status==='not-nse');
-  if(!remaining.length){
-    prog.style.display='none'; btn.disabled=false;
-    toast(`Lookup complete: ${ok} found ✓`,'ok',5000);
-    return;
-  }
-
   // Step 2: API bulk lookup for stocks not in embedded map
   const remaining=toLookup.filter(r=>r.status==='not-nse');
   if(!remaining.length){
