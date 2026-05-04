@@ -166,24 +166,28 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
 
 <!-- TAB 1: Chart -->
 <div class="panel" id="tab1">
-  <div class="refresh-wrap">
-    <button class="btn primary" id="refresh-btn" onclick="refreshPrices()">↻ Refresh prices</button>
+  <div class="refresh-wrap" style="padding:8px 12px;gap:8px;flex-wrap:wrap">
+    <button class="btn primary sm" id="refresh-btn" onclick="refreshPrices()">↻ Refresh prices</button>
     <span class="price-age" id="price-age"></span>
+    <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+      <select id="chart-range" onchange="renderCharts()" style="padding:3px 8px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg);color:var(--text);font-size:12px">
+        <option value="12">12 months</option>
+        <option value="24" selected>2 years</option>
+        <option value="36">3 years</option>
+        <option value="60">5 years</option>
+        <option value="0">All time</option>
+      </select>
+      <select id="chart-view" onchange="renderCharts()" style="padding:3px 8px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg);color:var(--text);font-size:12px">
+        <option value="waterfall">Waterfall</option>
+        <option value="line">Line (value vs invested)</option>
+        <option value="cashflow">Cash flow bars</option>
+      </select>
+    </div>
   </div>
-  <div class="chart-toolbar">
-    <select id="chart-range" onchange="renderCharts()">
-      <option value="12">Last 12 months</option>
-      <option value="24" selected>Last 2 years</option>
-      <option value="36">Last 3 years</option>
-      <option value="60">Last 5 years</option>
-      <option value="0">All time</option>
-    </select>
-    <label><input type="checkbox" id="sga" checked onchange="renderCharts()"> Gain/loss areas</label>
+  <div id="chart-legend" style="padding:4px 12px 0;font-size:11px;color:var(--text3);line-height:1.6"></div>
+  <div style="padding:6px 12px 10px;height:calc(100vh - 220px);min-height:260px;max-height:480px">
+    <canvas id="mc"></canvas>
   </div>
-  <div class="sec-head">Portfolio value vs net invested capital</div>
-  <div class="chart-area"><canvas id="mc" height="240"></canvas></div>
-  <div class="sec-head">Monthly cash flows — investments &amp; withdrawals</div>
-  <div class="chart-area"><canvas id="cc" height="130"></canvas></div>
 </div>
 
 <!-- TAB 2: All transactions -->
@@ -271,27 +275,33 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
   <div class="isin-toolbar">
     <input type="text" id="is" placeholder="Search scrip…" oninput="renderISIN()">
     <span style="font-size:12px;color:var(--text3)" id="isc"></span>
+    <button class="btn sm" onclick="document.getElementById('isin-file').click()">⬆ Upload Excel/CSV</button>
+    <input type="file" id="isin-file" style="display:none" accept=".csv,.xlsx,.xls" onchange="importISINFile(this.files[0]);this.value=''">
+    <button class="btn sm" id="lookup-btn" onclick="lookupAllISINs()">🔍 Lookup symbols</button>
     <button class="btn sm primary" onclick="saveISIN()">💾 Save to Box</button>
     <button class="btn sm" onclick="addISINRow()">+ Add row</button>
     <button class="btn sm" onclick="autoFill()">Auto-fill from transactions</button>
   </div>
+  <div id="lookup-progress" style="display:none;padding:6px 12px;font-size:11px;color:var(--text2);background:var(--bg2);border-bottom:0.5px solid var(--border)"></div>
   <div class="tbl-wrap" style="padding-top:6px">
     <div class="tbl-scroll">
       <table>
         <thead><tr>
-          <th style="width:36%">mProfit scrip name</th>
-          <th style="width:20%">ISIN</th>
-          <th style="width:22%">Yahoo symbol</th>
-          <th style="width:17%">NSE symbol</th>
-          <th style="width:5%"></th>
+          <th style="width:30%">mProfit scrip name</th>
+          <th style="width:16%">ISIN</th>
+          <th style="width:18%">Yahoo symbol</th>
+          <th style="width:14%">NSE symbol</th>
+          <th style="width:14%">BSE code</th>
+          <th style="width:8%">Status</th>
         </tr></thead>
         <tbody id="ib"></tbody>
       </table>
     </div>
   </div>
   <div class="tip blue" style="margin-top:8px">
-    ISIN takes priority for price lookup → Yahoo symbol → NSE symbol + ".NS" → built-in map.<br>
-    ISINs available on NSE/BSE website or broker statements. Scrip names must match mProfit exactly.
+    <b>Upload your ISIN mapping Excel</b> — needs columns "Scrip Name" (or mProfit name) and "ISIN".<br>
+    Then click <b>Lookup symbols</b> to auto-fill Yahoo/NSE/BSE from Yahoo Finance search API.<br>
+    Lookup priority: Yahoo symbol → NSE symbol+".NS" → BSE code+".BO" → built-in map.
   </div>
 </div>
 
@@ -327,7 +337,7 @@ const YFP='https://corsproxy.io/?';
 let bToken=null,fId=null;
 let batches=[],txns=[],prices={},isinMap=[];
 let active='all';
-let mC=null,cC=null;
+let mC=null;
 let pf={rows:[],cols:{},member:''};
 let ss={h:{c:-1,d:1},t:{c:-1,d:1}};
 
@@ -700,23 +710,83 @@ function renderT(){
 // ── Charts ───────────────────────────────────────────────────
 function renderCharts(){
   const n=parseInt(document.getElementById('chart-range')?.value||'24');
-  let data=computeM(fTxns());if(n>0)data=data.slice(-n);if(!data.length)return;
+  const view=document.getElementById('chart-view')?.value||'waterfall';
+  let data=computeM(fTxns());if(n>0)data=data.slice(-n);
+  if(!data.length){document.getElementById('chart-legend').textContent='No data yet — upload transactions and refresh prices.';return;}
   const dk=matchMedia('(prefers-color-scheme:dark)').matches;
   const tc=dk?'#a09e96':'#66665f';const gc=dk?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)';
-  const sg=document.getElementById('sga')?.checked;
   const labs=data.map(d=>d.label);
   if(mC)mC.destroy();
-  const ds=[
-    {label:'Net invested',data:data.map(d=>d.ni),backgroundColor:'rgba(24,95,165,0.1)',borderColor:'rgba(24,95,165,0.55)',borderWidth:1.5,fill:true,tension:.35,order:3},
-    {label:'Portfolio value',data:data.map(d=>d.pv),borderColor:'#0b6048',borderWidth:2.5,fill:false,tension:.35,pointRadius:0,order:0,spanGaps:true},
-  ];
-  if(sg){
-    ds.push({label:'Gain area',data:data.map(d=>d.gain>0?d.ni+d.gain:null),backgroundColor:'rgba(45,107,14,0.12)',borderColor:'transparent',fill:{target:0,above:'rgba(45,107,14,0.14)'},tension:.35,pointRadius:0,order:2,spanGaps:true});
-    ds.push({label:'Loss area',data:data.map(d=>d.loss>0?d.ni-d.loss:null),backgroundColor:'rgba(154,40,40,0.1)',borderColor:'transparent',fill:{target:0,below:'rgba(154,40,40,0.12)'},tension:.35,pointRadius:0,order:4,spanGaps:true});
+  const ctx=document.getElementById('mc').getContext('2d');
+  const leg=document.getElementById('chart-legend');
+
+  if(view==='waterfall'){
+    // Waterfall: floating bars [start, end] per period showing net change
+    // Each bar = [prevValue, currentValue] coloured green/red
+    // Stacked into components: investment delta + market delta
+    const bars=[];
+    let running=0;
+    data.forEach((d,i)=>{
+      const prevVal=i===0?0:running;
+      const invDelta=d.inf-d.out; // net cash invested this period
+      const endVal=d.pv||prevVal;   // portfolio value at end of period
+      const mktDelta=d.pv?endVal-prevVal-invDelta:0; // pure market movement
+      running=d.pv||running+invDelta;
+      bars.push({
+        label:d.label,prevVal,invDelta,mktDelta,endVal:running,
+        invBar:[prevVal,prevVal+invDelta],
+        mktBar:[prevVal+invDelta,prevVal+invDelta+mktDelta],
+      });
+    });
+    // Investment bars (blue = inflow, orange = net outflow)
+    const invBars=bars.map(b=>({x:b.label,y:b.invBar}));
+    const mktGain=bars.map(b=>b.mktDelta>0?{x:b.label,y:b.mktBar}:null);
+    const mktLoss=bars.map(b=>b.mktDelta<0?{x:b.label,y:b.mktBar}:null);
+    const totalLine=bars.map(b=>b.endVal||null);
+    leg.innerHTML='<span style="color:var(--blue-text)">■ Net investment</span> &nbsp; <span style="color:var(--green-text)">■ Market gain</span> &nbsp; <span style="color:var(--red-text)">■ Market loss</span> &nbsp; <span style="color:var(--teal-text)">— Portfolio value</span>';
+    mC=new Chart(ctx,{
+      type:'bar',
+      data:{labels:labs,datasets:[
+        {label:'Net investment',data:invBars,backgroundColor:bars.map(b=>b.invDelta>=0?'rgba(24,95,165,0.6)':'rgba(154,40,40,0.5)'),borderWidth:0,borderRadius:2,barPercentage:0.7},
+        {label:'Market gain',data:mktGain,backgroundColor:'rgba(45,107,14,0.65)',borderWidth:0,borderRadius:2,barPercentage:0.7},
+        {label:'Market loss',data:mktLoss,backgroundColor:'rgba(154,40,40,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.7},
+        {label:'Portfolio value',data:totalLine,type:'line',borderColor:dk?'#4db894':'#0b6048',borderWidth:2,pointRadius:0,fill:false,tension:.3,order:-1,yAxisID:'y',spanGaps:true},
+      ]},
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        parsing:{xAxisKey:'x',yAxisKey:'y'},
+        interaction:{intersect:false,mode:'index'},
+        plugins:{
+          legend:{display:false},
+          tooltip:{callbacks:{
+            label:ctx=>{
+              const v=ctx.raw;
+              if(Array.isArray(v))return`  ${ctx.dataset.label}: ${inrK(v[1]-v[0])} (${inrK(v[0])} → ${inrK(v[1])})`;
+              return`  ${ctx.dataset.label}: ${inrK(v||0)}`;
+            }
+          }}
+        },
+        scales:{
+          x:{ticks:{color:tc,font:{size:10},maxTicksLimit:18},grid:{color:gc}},
+          y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(v)},grid:{color:gc},stacked:true},
+        }
+      }
+    });
+
+  }else if(view==='line'){
+    leg.innerHTML='<span style="color:rgba(24,95,165,0.8)">■ Net invested</span> &nbsp; <span style="color:var(--teal-text)">— Portfolio value</span>';
+    const ds=[
+      {label:'Net invested',data:data.map(d=>d.ni),backgroundColor:'rgba(24,95,165,0.1)',borderColor:'rgba(24,95,165,0.55)',borderWidth:1.5,fill:true,tension:.35,order:3},
+      {label:'Portfolio value',data:data.map(d=>d.pv),borderColor:dk?'#4db894':'#0b6048',borderWidth:2.5,fill:false,tension:.35,pointRadius:0,order:0,spanGaps:true},
+      {label:'Gain area',data:data.map(d=>d.gain>0?d.ni+d.gain:null),backgroundColor:'transparent',borderColor:'transparent',fill:{target:0,above:'rgba(45,107,14,0.12)'},tension:.35,pointRadius:0,order:2,spanGaps:true},
+      {label:'Loss area',data:data.map(d=>d.loss>0?d.ni-d.loss:null),backgroundColor:'transparent',borderColor:'transparent',fill:{target:0,below:'rgba(154,40,40,0.1)'},tension:.35,pointRadius:0,order:4,spanGaps:true},
+    ];
+    mC=new Chart(ctx,{type:'line',data:{labels:labs,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:'index'},plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`  ${ctx.dataset.label}: ${inrK(ctx.raw||0)}`}}},scales:{x:{ticks:{color:tc,font:{size:10},maxTicksLimit:16},grid:{color:gc}},y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(v)},grid:{color:gc}}}}});
+
+  }else{ // cashflow
+    leg.innerHTML='<span style="color:rgba(24,95,165,0.8)">■ Investment</span> &nbsp; <span style="color:rgba(154,40,40,0.7)">■ Withdrawal</span>';
+    mC=new Chart(ctx,{type:'bar',data:{labels:labs,datasets:[{label:'Investment',data:data.map(d=>d.inf||null),backgroundColor:'rgba(24,95,165,0.5)',borderRadius:2},{label:'Withdrawal',data:data.map(d=>d.out?-d.out:null),backgroundColor:'rgba(154,40,40,0.5)',borderRadius:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`  ${ctx.dataset.label}: ${inrK(Math.abs(ctx.raw||0))}`}}},scales:{x:{ticks:{color:tc,font:{size:10},maxTicksLimit:16},grid:{color:gc}},y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(Math.abs(v))},grid:{color:gc}}}}});
   }
-  mC=new Chart(document.getElementById('mc').getContext('2d'),{type:'line',data:{labels:labs,datasets:ds},options:{responsive:true,maintainAspectRatio:true,interaction:{intersect:false,mode:'index'},plugins:{legend:{labels:{color:tc,font:{size:11},boxWidth:10,padding:10}},tooltip:{callbacks:{label:ctx=>`  ${ctx.dataset.label}: ${inrK(ctx.raw||0)}`}}},scales:{x:{ticks:{color:tc,font:{size:10},maxTicksLimit:16},grid:{color:gc}},y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(v)},grid:{color:gc}}}}});
-  if(cC)cC.destroy();
-  cC=new Chart(document.getElementById('cc').getContext('2d'),{type:'bar',data:{labels:labs,datasets:[{label:'Investment',data:data.map(d=>d.inf||null),backgroundColor:'rgba(24,95,165,0.45)',borderRadius:2},{label:'Withdrawal',data:data.map(d=>d.out?-d.out:null),backgroundColor:'rgba(154,40,40,0.45)',borderRadius:2}]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{labels:{color:tc,font:{size:11},boxWidth:10,padding:10}},tooltip:{callbacks:{label:ctx=>`  ${ctx.dataset.label}: ${inrK(Math.abs(ctx.raw||0))}`}}},scales:{x:{ticks:{color:tc,font:{size:10},maxTicksLimit:16},grid:{color:gc}},y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(Math.abs(v))},grid:{color:gc}}}}});
 }
 
 // ── Upload history ───────────────────────────────────────────
@@ -759,22 +829,93 @@ function updateUC(){document.getElementById('uc').textContent=batches.length||'0
 // ── ISIN ─────────────────────────────────────────────────────
 function autoFill(){
   const ex=new Set(isinMap.map(r=>r.scrip.toUpperCase()));
-  const nr=[...new Set(txns.map(t=>t.scrip))].filter(s=>!ex.has(s.toUpperCase())).map(s=>({scrip:s,isin:'',yahoo:'',nse:''}));
+  const nr=[...new Set(txns.map(t=>t.scrip))].filter(s=>!ex.has(s.toUpperCase())).map(s=>({scrip:s,isin:'',yahoo:'',nse:'',bse:'',status:''}));
   isinMap=[...isinMap,...nr];renderISIN();toast(`Added ${nr.length} scrips to ISIN map`,'ok');
 }
-function addISINRow(){isinMap.push({scrip:'',isin:'',yahoo:'',nse:''});renderISIN();}
+function addISINRow(){isinMap.push({scrip:'',isin:'',yahoo:'',nse:'',bse:'',status:''});renderISIN();}
+
+async function importISINFile(file){
+  if(!file)return;
+  toast('Reading ISIN file…','info',0);
+  let rows;
+  try{
+    if(file.name.toLowerCase().endsWith('.csv')){rows=parseCSV(await file.text());}
+    else{const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array',raw:true});rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:true});}
+  }catch(e){toast('File error: '+e.message,'error');return;}
+  // Find header row and columns
+  let hi=-1,sc=-1,ic=-1,yc=-1,nc=-1,bc=-1;
+  for(let i=0;i<Math.min(10,rows.length);i++){
+    const r=rows[i].map(x=>String(x||'').toLowerCase());
+    const si=r.findIndex(x=>x.includes('scrip')||x.includes('stock')||x.includes('name')||x.includes('company')||x.includes('security'));
+    const ii=r.findIndex(x=>x.includes('isin'));
+    if(ii>=0){hi=i;sc=si>=0?si:0;ic=ii;
+      yc=r.findIndex(x=>x.includes('yahoo')||x.includes('ticker'));
+      nc=r.findIndex(x=>x.includes('nse')||x.includes('symbol'));
+      bc=r.findIndex(x=>x.includes('bse')||x.includes('code'));
+      break;
+    }
+  }
+  if(hi<0||ic<0){toast('Could not find ISIN column in file. Need a column named "ISIN".','error',6000);return;}
+  let added=0,updated=0;
+  for(let i=hi+1;i<rows.length;i++){
+    const row=rows[i];
+    const scrip=String(row[sc]||'').trim();const isin=String(row[ic]||'').trim();
+    if(!scrip&&!isin)continue;
+    const yahoo=yc>=0?String(row[yc]||'').trim():'';
+    const nse=nc>=0?String(row[nc]||'').trim():'';
+    const bse=bc>=0?String(row[bc]||'').trim():'';
+    const ex=scrip?isinMap.find(r=>r.scrip.toUpperCase()===scrip.toUpperCase()):null;
+    if(ex){if(isin)ex.isin=isin;if(yahoo)ex.yahoo=yahoo;if(nse)ex.nse=nse;if(bse)ex.bse=bse;updated++;}
+    else{isinMap.push({scrip,isin,yahoo,nse,bse,status:''});added++;}
+  }
+  renderISIN();
+  toast(`ISIN file: ${added} added, ${updated} updated ✓`,'ok');
+}
+
+async function lookupAllISINs(){
+  const toLookup=isinMap.filter(r=>r.isin&&(!r.yahoo||r.status==='retry'));
+  if(!toLookup.length){toast('No ISINs to look up (fill the ISIN column first)','error');return;}
+  const btn=document.getElementById('lookup-btn');
+  const prog=document.getElementById('lookup-progress');
+  btn.disabled=true;prog.style.display='block';
+  let done=0,ok=0;
+  for(const r of toLookup){
+    prog.textContent=`Looking up ${r.scrip||r.isin} (${++done}/${toLookup.length})…`;
+    try{
+      const res=await fetch(YFP+encodeURIComponent(`https://query2.finance.yahoo.com/v1/finance/search?q=${r.isin}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`));
+      const d=await res.json();
+      const quotes=(d.quotes||[]).filter(q=>q.quoteType==='EQUITY');
+      const ns=quotes.find(q=>q.symbol&&q.symbol.endsWith('.NS'));
+      const bs=quotes.find(q=>q.symbol&&q.symbol.endsWith('.BO'));
+      const best=ns||bs||quotes[0];
+      if(best){
+        r.yahoo=best.symbol||'';
+        r.nse=ns?ns.symbol.replace('.NS',''):'';
+        r.bse=bs?bs.symbol.replace('.BO',''):'';
+        r.status='✓';ok++;
+      }else{r.status='?';}
+    }catch{r.status='err';}
+    renderISIN();
+    await new Promise(res=>setTimeout(res,300));
+  }
+  prog.style.display='none';btn.disabled=false;
+  renderISIN();toast(`Symbol lookup: ${ok}/${toLookup.length} found ✓`,'ok');
+}
+
 function renderISIN(){
   const q=document.getElementById('is')?.value.toLowerCase()||'';
-  const list=isinMap.filter(r=>!q||r.scrip.toLowerCase().includes(q));
+  const list=isinMap.filter(r=>!q||r.scrip.toLowerCase().includes(q)||(r.isin||'').toLowerCase().includes(q));
   document.getElementById('isc').textContent=list.length+' / '+isinMap.length+' scrips';
   document.getElementById('ib').innerHTML=list.map((r)=>{
     const ri=isinMap.indexOf(r);
+    const sc=r.status==='✓'?'var(--green)':r.status==='?'||r.status==='err'?'var(--red)':'var(--text3)';
     return`<tr>
       <td><input class="ic" value="${r.scrip||''}" oninput="isinMap[${ri}].scrip=this.value" placeholder="mProfit scrip name"></td>
       <td><input class="ic" value="${r.isin||''}" oninput="isinMap[${ri}].isin=this.value" placeholder="INE000A01011"></td>
       <td><input class="ic" value="${r.yahoo||''}" oninput="isinMap[${ri}].yahoo=this.value" placeholder="HDFCBANK.NS"></td>
       <td><input class="ic" value="${r.nse||''}" oninput="isinMap[${ri}].nse=this.value" placeholder="HDFCBANK"></td>
-      <td><button class="btn sm" style="padding:2px 6px;color:var(--red)" onclick="isinMap.splice(${ri},1);renderISIN()">✕</button></td>
+      <td><input class="ic" value="${r.bse||''}" oninput="isinMap[${ri}].bse=this.value" placeholder="500180"></td>
+      <td style="text-align:center;color:${sc};font-size:11px">${r.status||'—'}</td>
     </tr>`;
   }).join('');
 }
