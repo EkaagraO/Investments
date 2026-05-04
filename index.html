@@ -166,27 +166,59 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
 
 <!-- TAB 1: Chart -->
 <div class="panel" id="tab1">
-  <div class="refresh-wrap" style="padding:8px 12px;gap:8px;flex-wrap:wrap">
+  <!-- Toolbar row -->
+  <div class="refresh-wrap" style="padding:7px 12px 0;gap:6px;flex-wrap:wrap;align-items:center">
     <button class="btn primary sm" id="refresh-btn" onclick="refreshPrices()">↻ Refresh prices</button>
-    <span class="price-age" id="price-age"></span>
-    <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
-      <select id="chart-range" onchange="renderCharts()" style="padding:3px 8px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg);color:var(--text);font-size:12px">
+    <span class="price-age" id="price-age" style="font-size:11px;color:var(--text3)"></span>
+    <div style="margin-left:auto;display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+      <select id="cf-scrip" onchange="renderCharts()" style="padding:3px 7px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg);color:var(--text);font-size:11.5px;max-width:140px">
+        <option value="">All scrips</option>
+      </select>
+      <select id="cf-member" onchange="renderCharts()" style="padding:3px 7px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg);color:var(--text);font-size:11.5px">
+        <option value="">All accounts</option>
+      </select>
+      <select id="chart-range" onchange="renderCharts()" style="padding:3px 7px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg);color:var(--text);font-size:11.5px">
         <option value="12">12 months</option>
         <option value="24" selected>2 years</option>
         <option value="36">3 years</option>
         <option value="60">5 years</option>
         <option value="0">All time</option>
       </select>
-      <select id="chart-view" onchange="renderCharts()" style="padding:3px 8px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg);color:var(--text);font-size:12px">
-        <option value="waterfall">Waterfall</option>
-        <option value="line">Line (value vs invested)</option>
-        <option value="cashflow">Cash flow bars</option>
-      </select>
     </div>
   </div>
-  <div id="chart-legend" style="padding:4px 12px 0;font-size:11px;color:var(--text3);line-height:1.6"></div>
-  <div style="padding:6px 12px 10px;height:calc(100vh - 220px);min-height:260px;max-height:480px">
+  <!-- Date range slider -->
+  <div style="padding:4px 12px;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text2)">
+    <span id="dr-from" style="width:60px">—</span>
+    <input type="range" id="dr-start" min="0" max="100" value="0" oninput="renderCharts()" style="flex:1">
+    <input type="range" id="dr-end" min="0" max="100" value="100" oninput="renderCharts()" style="flex:1">
+    <span id="dr-to" style="width:60px;text-align:right">—</span>
+  </div>
+  <!-- Legend -->
+  <div id="chart-legend" style="padding:2px 12px 3px;font-size:11px;color:var(--text3)"></div>
+  <!-- Chart -->
+  <div style="padding:0 12px 6px;height:calc(100vh - 310px);min-height:220px;max-height:380px">
     <canvas id="mc"></canvas>
+  </div>
+  <!-- MoM table -->
+  <div style="border-top:0.5px solid var(--border)">
+    <div style="padding:5px 12px;font-size:10.5px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.04em">Month-on-month</div>
+    <div style="overflow:auto;max-height:200px">
+      <table style="font-size:11px;width:100%;min-width:650px;border-collapse:collapse">
+        <thead>
+          <tr>
+            <th style="padding:4px 8px;text-align:left;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Month</th>
+            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Opening</th>
+            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Invested</th>
+            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Redeemed</th>
+            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Dividend</th>
+            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Mkt move</th>
+            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Closing</th>
+            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">IRR %</th>
+          </tr>
+        </thead>
+        <tbody id="mom-body"><tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text3)">Refresh prices to see monthly performance</td></tr></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -344,7 +376,7 @@ const REDIRECT=location.origin+location.pathname;
 const FOLDER='Investments';
 // ── Price API (Python backend on Render — handles Yahoo Finance) ──
 // After deploying investment-api, paste its URL in Settings or here:
-let API_BASE=localStorage.getItem('inv_api_url')||'';
+let API_BASE=localStorage.getItem('inv_api_url')||'https://investments-api-fz9y.onrender.com';
 
 // ── State ───────────────────────────────────────────────────
 let bToken=null,fId=null;
@@ -466,31 +498,49 @@ async function fetchYF(sym){
 }
 async function refreshPrices(){
   if(!bToken){toast('Connect Box first','error');return;}
-  if(!API_BASE){toast('Enter your API URL in Settings (⚙) first','error',6000);return;}
+  if(!API_BASE){toast('Enter your API URL in Settings (⚙)','error',6000);return;}
   const btn=document.getElementById('refresh-btn');
   btn.textContent='↻ Fetching…';btn.disabled=true;
   document.getElementById('price-age').textContent='Fetching prices…';
-  const syms=[...new Set(txns.filter(t=>t.type==='Buy'||t.type==='Sell').map(t=>toYF(t.scrip)).filter(Boolean))];
-  if(!syms.length){toast('No symbols to fetch — complete ISIN map first','error');btn.textContent='↻ Refresh prices';btn.disabled=false;return;}
+
+  // Only fetch symbols we don't have, or whose latest month is stale
+  const thisMonth=new Date().toISOString().slice(0,7);
+  const allSyms=[...new Set(txns.filter(t=>t.type==='Buy'||t.type==='Sell').map(t=>toYF(t.scrip)).filter(Boolean))];
+  // Symbols needing refresh: missing entirely, or latest history month < this month
+  const needRefresh=allSyms.filter(s=>{
+    const p=prices[s];
+    if(!p)return true;
+    const months=Object.keys(p.history||{}).sort();
+    return months.length===0||months[months.length-1]<thisMonth;
+  });
+
+  if(!needRefresh.length){
+    document.getElementById('price-age').textContent=`Up to date — ${allSyms.length} scrips`;
+    btn.textContent='↻ Refresh prices';btn.disabled=false;
+    toast('All prices already up to date ✓','ok');return;
+  }
+
   try{
     const r=await fetch(`${API_BASE}/prices`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({symbols:syms})
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({symbols:needRefresh})
     });
-    if(!r.ok)throw new Error(`API returned ${r.status}`);
+    if(!r.ok)throw new Error(`API returned ${r.status} — check ${API_BASE} is running`);
     const d=await r.json();
     const fetched=d.prices||{};
-    Object.assign(prices,fetched);
+    // Merge new data into existing prices (preserve old months, overwrite latest)
+    for(const[sym,data] of Object.entries(fetched)){
+      prices[sym]={...data,history:{...(prices[sym]?.history||{}),...data.history}};
+    }
     const ok=Object.keys(fetched).length;
-    const fail=(d.errors||[]).length;
+    const failed=(d.errors||[]);
     await bSave('prices.json',{updated:new Date().toISOString(),prices});
-    document.getElementById('price-age').textContent=`Updated just now · ${ok}/${syms.length} scrips`;
-    toast(`Prices refreshed: ${ok}/${syms.length} ✓${fail?` (${fail} failed)`:''}`,ok>0?'ok':'error');
+    document.getElementById('price-age').textContent=`Updated now · ${ok}/${needRefresh.length} refreshed, ${allSyms.length-needRefresh.length} cached`;
+    toast(`Prices updated: ${ok} refreshed${failed.length?`, ${failed.length} failed`:''}`,ok>0?'ok':'error');
     renderAll();
   }catch(e){
-    toast(`Price fetch failed: ${e.message} — is the API running?`,'error',8000);
-    document.getElementById('price-age').textContent='Failed — check API URL in Settings';
+    toast(`Failed: ${e.message}`,'error',8000);
+    document.getElementById('price-age').textContent=`Failed — ${e.message}`;
   }
   btn.textContent='↻ Refresh prices';btn.disabled=false;
 }
@@ -627,36 +677,105 @@ async function importTxns(){
 function fTxns(){return active==='all'?txns:txns.filter(t=>t.member===active);}
 function computeH(tl){
   const h={};let td=0;
-  for(const t of tl){
+  // Process transactions in date order so splits/bonuses apply correctly
+  const sorted=[...tl].sort((a,b)=>a.date>b.date?1:-1);
+  for(const t of sorted){
     if(!h[t.scrip])h[t.scrip]={scrip:t.scrip,qty:0,cost:0,bq:0,div:0,mems:new Set()};
     const r=h[t.scrip];r.mems.add(t.member);
     if(t.type==='Buy'){r.qty+=t.qty;r.cost+=Math.abs(t.amount);r.bq+=t.qty;}
-    else if(t.type==='Sell')r.qty-=t.qty;
+    else if(t.type==='Sell'){
+      // Reduce avg cost proportionally on sell
+      const sellRatio=r.qty>0?Math.min(t.qty/r.qty,1):0;
+      r.cost-=r.cost*sellRatio;
+      r.qty-=t.qty;
+    }
     else if(t.type==='Bonus')r.qty+=t.qty;
+    // Split: mProfit records qty as shares RECEIVED (additional), not ratio
+    else if(t.type==='Split')r.qty+=t.qty;
     else if(t.type==='Dividend'){r.div+=Math.abs(t.amount);td+=Math.abs(t.amount);}
-    else if(t.type==='Split'&&t.qty>1)r.qty*=t.qty;
     else if(t.type==='Rights'){r.qty+=t.qty;r.cost+=Math.abs(t.amount||0);}
   }
   for(const k of Object.keys(h))if(h[k].qty<0.001)delete h[k];
   return{holdings:Object.values(h),totalDiv:td};
 }
+// ── XIRR calculator ───────────────────────────────────────────
+function xirr(cashflows){
+  // cashflows: [{date, amount}] — negative=outflow(buy), positive=inflow(sell/div/current)
+  if(cashflows.length<2)return null;
+  const d0=cashflows[0].date;
+  const days=cashflows.map(c=>(c.date-d0)/(1000*60*60*24));
+  const npv=r=>cashflows.reduce((s,c,i)=>s+c.amount/Math.pow(1+r,days[i]/365),0);
+  const dnpv=r=>cashflows.reduce((s,c,i)=>s-days[i]/365*c.amount/Math.pow(1+r,days[i]/365+1),0);
+  let r=0.1;
+  for(let i=0;i<100;i++){
+    const f=npv(r),df=dnpv(r);
+    if(Math.abs(df)<1e-12)break;
+    const nr=r-f/df;
+    if(Math.abs(nr-r)<1e-8){r=nr;break;}
+    r=nr;
+    if(r<-0.999)r=-0.999;
+  }
+  return Math.abs(r)>50?null:Math.round(r*10000)/100; // cap at ±5000%
+}
+
 function computeM(tl){
-  if(!tl.length)return[];
+  if(!tl.length)return{months:[],xirr_pct:null};
   const sorted=[...tl].sort((a,b)=>a.date>b.date?1:-1);
   let d=new Date(sorted[0].date.slice(0,7)+'-01');
-  const months=[];while(d<=new Date()){months.push(d.toISOString().slice(0,7));d=new Date(d.getFullYear(),d.getMonth()+1,1);}
-  let ci=0,cw=0;const hq={};
-  return months.map(mon=>{
-    let inf=0,out=0;
-    for(const t of tl.filter(t=>t.date&&t.date.slice(0,7)===mon)){
-      if(t.type==='Buy'){const a=Math.abs(t.amount);ci+=a;inf+=a;hq[t.scrip]=(hq[t.scrip]||0)+t.qty;}
-      if(t.type==='Sell'){const a=Math.abs(t.amount);cw+=a;out+=a;hq[t.scrip]=(hq[t.scrip]||0)-t.qty;}
-      if(t.type==='Bonus')hq[t.scrip]=(hq[t.scrip]||0)+t.qty;
+  const months=[];
+  while(d<=new Date()){months.push(d.toISOString().slice(0,7));d=new Date(d.getFullYear(),d.getMonth()+1,1);}
+
+  // Build running state month by month
+  const hq={};    // scrip→qty
+  let cumBuy=0,cumSell=0;
+  const rows=[];
+
+  // For XIRR: all cashflows (buys negative, sells+dividends+current positive)
+  const xflows=[];
+
+  months.forEach(mon=>{
+    const monTxns=tl.filter(t=>t.date&&t.date.slice(0,7)===mon);
+    let buy=0,sell=0,div=0;
+    for(const t of monTxns){
+      if(t.type==='Buy'){const a=Math.abs(t.amount);buy+=a;cumBuy+=a;hq[t.scrip]=(hq[t.scrip]||0)+t.qty;xflows.push({date:new Date(t.date),amount:-a});}
+      else if(t.type==='Sell'){const a=Math.abs(t.amount);sell+=a;cumSell+=a;hq[t.scrip]=(hq[t.scrip]||0)-t.qty;xflows.push({date:new Date(t.date),amount:a});}
+      else if(t.type==='Bonus')hq[t.scrip]=(hq[t.scrip]||0)+t.qty;
+      else if(t.type==='Split')hq[t.scrip]=(hq[t.scrip]||0)+t.qty;
+      else if(t.type==='Dividend'){div+=Math.abs(t.amount);xflows.push({date:new Date(t.date),amount:Math.abs(t.amount)});}
     }
-    const ni=ci-cw;let pv=0;
-    for(const[sc,qty]of Object.entries(hq)){if(qty<=0)continue;const p=prices[toYF(sc)];const cmp=p?.history?.[mon]??p?.current;if(cmp)pv+=qty*cmp;}
-    return{label:new Date(mon+'-15').toLocaleDateString('en-IN',{month:'short',year:'2-digit'}),ni:Math.round(ni),pv:pv?Math.round(pv):null,inf:Math.round(inf),out:Math.round(out),gain:pv>ni?Math.round(pv-ni):0,loss:pv>0&&pv<ni?Math.round(ni-pv):0};
-  }).filter(r=>r.ni>0||r.pv);
+    // Portfolio value at end of month
+    let pv=0;
+    for(const[sc,qty]of Object.entries(hq)){
+      if(qty<=0)continue;
+      const p=prices[toYF(sc)];
+      const cmp=p?.history?.[mon]??p?.current;
+      if(cmp)pv+=qty*cmp;
+    }
+    const netInv=cumBuy-cumSell;
+    const prevRow=rows[rows.length-1];
+    const openVal=prevRow?prevRow.closeVal:0;
+    const mktMove=pv?(pv-openVal-buy+sell-div):0;
+    rows.push({
+      mon, label:new Date(mon+'-15').toLocaleDateString('en-IN',{month:'short',year:'2-digit'}),
+      buy,sell,div,
+      netInv:Math.round(netInv),
+      openVal:Math.round(openVal),
+      closeVal:pv?Math.round(pv):null,
+      mktMove:pv?Math.round(mktMove):null,
+    });
+  });
+
+  // Compute rolling XIRR per month for the IRR line
+  // Add terminal cashflow (current portfolio value) for IRR at each point
+  const irrLine=rows.map((row,i)=>{
+    if(!row.closeVal||xflows.length<2)return null;
+    const flows=[...xflows.filter(f=>f.date<=new Date(row.mon+'-28'))];
+    if(!flows.length)return null;
+    flows.push({date:new Date(row.mon+'-28'),amount:row.closeVal});
+    return xirr(flows);
+  });
+
+  return{months:rows,irrLine};
 }
 
 // ── Sort ─────────────────────────────────────────────────────
@@ -669,7 +788,7 @@ function srt(tbl,col){
 }
 
 // ── Render holdings ──────────────────────────────────────────
-function renderAll(){renderH();renderT();renderCharts();}
+function renderAll(){renderH();renderT();populateChartFilters();renderCharts();}
 function gfv(id,idx){const r=document.getElementById(id);if(!r)return'';const el=r.querySelectorAll('input,select');return el[idx]?el[idx].value.toLowerCase().trim():'';}
 function renderH(){
   const{holdings,totalDiv}=computeH(fTxns());
@@ -742,85 +861,130 @@ function renderT(){
 }
 
 // ── Charts ───────────────────────────────────────────────────
+function populateChartFilters(){
+  const scrips=[...new Set(txns.map(t=>t.scrip))].sort();
+  const mems=[...new Set(txns.map(t=>t.member).filter(Boolean))].sort();
+  const ss=document.getElementById('cf-scrip');
+  const sm=document.getElementById('cf-member');
+  if(ss){const prev=ss.value;ss.innerHTML='<option value="">All scrips</option>'+scrips.map(s=>`<option>${s}</option>`).join('');ss.value=prev;}
+  if(sm){const prev=sm.value;sm.innerHTML='<option value="">All accounts</option>'+mems.map(m=>`<option>${m}</option>`).join('');sm.value=prev;}
+}
+
+function chartFilteredTxns(){
+  const scrip=document.getElementById('cf-scrip')?.value||'';
+  const mem=document.getElementById('cf-member')?.value||'';
+  let tl=fTxns();
+  if(scrip)tl=tl.filter(t=>t.scrip===scrip);
+  if(mem)tl=tl.filter(t=>t.member===mem);
+  return tl;
+}
+
 function renderCharts(){
-  const n=parseInt(document.getElementById('chart-range')?.value||'24');
-  const view=document.getElementById('chart-view')?.value||'waterfall';
-  let data=computeM(fTxns());if(n>0)data=data.slice(-n);
-  if(!data.length){document.getElementById('chart-legend').textContent='No data yet — upload transactions and refresh prices.';return;}
+  const tl=chartFilteredTxns();
+  const{months:allRows,irrLine}=computeM(tl);
+  if(!allRows.length){
+    document.getElementById('chart-legend').textContent='No data — upload transactions and refresh prices.';
+    return;
+  }
+
+  // Apply range selector
+  const n=parseInt(document.getElementById('chart-range')?.value||'0');
+
+  // Apply date slider
+  const slStart=parseInt(document.getElementById('dr-start')?.value||'0');
+  const slEnd  =parseInt(document.getElementById('dr-end')?.value||'100');
+  const si=Math.floor(slStart/100*(allRows.length-1));
+  const ei=Math.min(Math.floor(slEnd/100*(allRows.length-1)),allRows.length-1);
+  let data=allRows.slice(si,ei+1);
+  if(n>0&&data.length>n)data=data.slice(-n);
+
+  // Update slider labels
+  if(data.length){
+    document.getElementById('dr-from').textContent=data[0].label;
+    document.getElementById('dr-to').textContent=data[data.length-1].label;
+  }
+
   const dk=matchMedia('(prefers-color-scheme:dark)').matches;
   const tc=dk?'#a09e96':'#66665f';const gc=dk?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)';
-  const labs=data.map(d=>d.label);
+  const labs=data.map(r=>r.label);
+
+  // Build waterfall bars:
+  // Each month: investment (blue up), redemption (orange down), dividend (teal up), mkt move (green/red)
+  const invBars=data.map(r=>r.buy?[r.openVal||0,(r.openVal||0)+r.buy]:null);
+  const selBars=data.map(r=>r.sell?[(r.openVal||0)+r.buy-r.sell,(r.openVal||0)+r.buy]:null);
+  const divBars=data.map(r=>r.div?[r.openVal||0,(r.openVal||0)+r.div]:null);
+  const gainBars=data.map(r=>(r.mktMove!=null&&r.mktMove>0)?[(r.closeVal||0)-r.mktMove,r.closeVal]:null);
+  const lossBars=data.map(r=>(r.mktMove!=null&&r.mktMove<0)?[r.closeVal,(r.closeVal||0)-r.mktMove]:null);
+  const closeLine=data.map(r=>r.closeVal);
+  const irrSlice=irrLine?irrLine.slice(si,ei+1).slice(n>0?-n:undefined):[];
+
+  document.getElementById('chart-legend').innerHTML=
+    '<span style="color:rgba(24,95,165,0.9)">■ Invest</span> '+
+    '<span style="color:rgba(154,80,14,0.9)">■ Redeem</span> '+
+    '<span style="color:rgba(11,96,72,0.9)">■ Dividend</span> '+
+    '<span style="color:rgba(45,107,14,0.9)">■ Mkt gain</span> '+
+    '<span style="color:rgba(154,40,40,0.9)">■ Mkt loss</span> '+
+    '<span style="color:rgba(24,95,165,0.7)">— Value</span> '+
+    (irrSlice.some(v=>v!=null)?'<span style="color:rgba(180,100,0,0.9)">-- IRR %</span>':'');
+
   if(mC)mC.destroy();
-  const ctx=document.getElementById('mc').getContext('2d');
-  const leg=document.getElementById('chart-legend');
-
-  if(view==='waterfall'){
-    // Waterfall: floating bars [start, end] per period showing net change
-    // Each bar = [prevValue, currentValue] coloured green/red
-    // Stacked into components: investment delta + market delta
-    const bars=[];
-    let running=0;
-    data.forEach((d,i)=>{
-      const prevVal=i===0?0:running;
-      const invDelta=d.inf-d.out; // net cash invested this period
-      const endVal=d.pv||prevVal;   // portfolio value at end of period
-      const mktDelta=d.pv?endVal-prevVal-invDelta:0; // pure market movement
-      running=d.pv||running+invDelta;
-      bars.push({
-        label:d.label,prevVal,invDelta,mktDelta,endVal:running,
-        invBar:[prevVal,prevVal+invDelta],
-        mktBar:[prevVal+invDelta,prevVal+invDelta+mktDelta],
-      });
-    });
-    // Investment bars (blue = inflow, orange = net outflow)
-    const invBars=bars.map(b=>({x:b.label,y:b.invBar}));
-    const mktGain=bars.map(b=>b.mktDelta>0?{x:b.label,y:b.mktBar}:null);
-    const mktLoss=bars.map(b=>b.mktDelta<0?{x:b.label,y:b.mktBar}:null);
-    const totalLine=bars.map(b=>b.endVal||null);
-    leg.innerHTML='<span style="color:var(--blue-text)">■ Net investment</span> &nbsp; <span style="color:var(--green-text)">■ Market gain</span> &nbsp; <span style="color:var(--red-text)">■ Market loss</span> &nbsp; <span style="color:var(--teal-text)">— Portfolio value</span>';
-    mC=new Chart(ctx,{
-      type:'bar',
-      data:{labels:labs,datasets:[
-        {label:'Net investment',data:invBars,backgroundColor:bars.map(b=>b.invDelta>=0?'rgba(24,95,165,0.6)':'rgba(154,40,40,0.5)'),borderWidth:0,borderRadius:2,barPercentage:0.7},
-        {label:'Market gain',data:mktGain,backgroundColor:'rgba(45,107,14,0.65)',borderWidth:0,borderRadius:2,barPercentage:0.7},
-        {label:'Market loss',data:mktLoss,backgroundColor:'rgba(154,40,40,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.7},
-        {label:'Portfolio value',data:totalLine,type:'line',borderColor:dk?'#4db894':'#0b6048',borderWidth:2,pointRadius:0,fill:false,tension:.3,order:-1,yAxisID:'y',spanGaps:true},
-      ]},
-      options:{
-        responsive:true,maintainAspectRatio:false,
-        parsing:{xAxisKey:'x',yAxisKey:'y'},
-        interaction:{intersect:false,mode:'index'},
-        plugins:{
-          legend:{display:false},
-          tooltip:{callbacks:{
-            label:ctx=>{
-              const v=ctx.raw;
-              if(Array.isArray(v))return`  ${ctx.dataset.label}: ${inrK(v[1]-v[0])} (${inrK(v[0])} → ${inrK(v[1])})`;
-              return`  ${ctx.dataset.label}: ${inrK(v||0)}`;
-            }
-          }}
-        },
-        scales:{
-          x:{ticks:{color:tc,font:{size:10},maxTicksLimit:18},grid:{color:gc}},
-          y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(v)},grid:{color:gc},stacked:true},
-        }
-      }
-    });
-
-  }else if(view==='line'){
-    leg.innerHTML='<span style="color:rgba(24,95,165,0.8)">■ Net invested</span> &nbsp; <span style="color:var(--teal-text)">— Portfolio value</span>';
-    const ds=[
-      {label:'Net invested',data:data.map(d=>d.ni),backgroundColor:'rgba(24,95,165,0.1)',borderColor:'rgba(24,95,165,0.55)',borderWidth:1.5,fill:true,tension:.35,order:3},
-      {label:'Portfolio value',data:data.map(d=>d.pv),borderColor:dk?'#4db894':'#0b6048',borderWidth:2.5,fill:false,tension:.35,pointRadius:0,order:0,spanGaps:true},
-      {label:'Gain area',data:data.map(d=>d.gain>0?d.ni+d.gain:null),backgroundColor:'transparent',borderColor:'transparent',fill:{target:0,above:'rgba(45,107,14,0.12)'},tension:.35,pointRadius:0,order:2,spanGaps:true},
-      {label:'Loss area',data:data.map(d=>d.loss>0?d.ni-d.loss:null),backgroundColor:'transparent',borderColor:'transparent',fill:{target:0,below:'rgba(154,40,40,0.1)'},tension:.35,pointRadius:0,order:4,spanGaps:true},
-    ];
-    mC=new Chart(ctx,{type:'line',data:{labels:labs,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:'index'},plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`  ${ctx.dataset.label}: ${inrK(ctx.raw||0)}`}}},scales:{x:{ticks:{color:tc,font:{size:10},maxTicksLimit:16},grid:{color:gc}},y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(v)},grid:{color:gc}}}}});
-
-  }else{ // cashflow
-    leg.innerHTML='<span style="color:rgba(24,95,165,0.8)">■ Investment</span> &nbsp; <span style="color:rgba(154,40,40,0.7)">■ Withdrawal</span>';
-    mC=new Chart(ctx,{type:'bar',data:{labels:labs,datasets:[{label:'Investment',data:data.map(d=>d.inf||null),backgroundColor:'rgba(24,95,165,0.5)',borderRadius:2},{label:'Withdrawal',data:data.map(d=>d.out?-d.out:null),backgroundColor:'rgba(154,40,40,0.5)',borderRadius:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`  ${ctx.dataset.label}: ${inrK(Math.abs(ctx.raw||0))}`}}},scales:{x:{ticks:{color:tc,font:{size:10},maxTicksLimit:16},grid:{color:gc}},y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(Math.abs(v))},grid:{color:gc}}}}});
+  const datasets=[
+    {label:'Investment',data:invBars,backgroundColor:'rgba(24,95,165,0.55)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:4},
+    {label:'Redemption',data:selBars,backgroundColor:'rgba(154,80,14,0.55)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:3},
+    {label:'Dividend',data:divBars,backgroundColor:'rgba(11,96,72,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:3},
+    {label:'Mkt gain',data:gainBars,backgroundColor:'rgba(45,107,14,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:2},
+    {label:'Mkt loss',data:lossBars,backgroundColor:'rgba(154,40,40,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:2},
+    {label:'Portfolio value',type:'line',data:closeLine,borderColor:'rgba(24,95,165,0.7)',borderWidth:2,pointRadius:0,fill:false,tension:.3,order:0,spanGaps:true,yAxisID:'y'},
+  ];
+  if(irrSlice.some(v=>v!=null)){
+    datasets.push({label:'IRR %',type:'line',data:irrSlice,borderColor:'rgba(180,100,0,0.85)',borderWidth:1.5,borderDash:[4,3],pointRadius:0,fill:false,tension:.3,order:1,spanGaps:true,yAxisID:'y2'});
   }
+
+  mC=new Chart(document.getElementById('mc').getContext('2d'),{
+    type:'bar',
+    data:{labels:labs,datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      parsing:{xAxisKey:'x',yAxisKey:'y'},
+      interaction:{intersect:false,mode:'index'},
+      plugins:{
+        legend:{display:false},
+        tooltip:{callbacks:{
+          label:ctx=>{
+            const v=ctx.raw;
+            if(Array.isArray(v))return`  ${ctx.dataset.label}: ${inrK(Math.abs(v[1]-v[0]))}`;
+            return v!=null?`  ${ctx.dataset.label}: ${ctx.dataset.yAxisID==='y2'?v+'%':inrK(v)}`:'';
+          }
+        }}
+      },
+      scales:{
+        x:{ticks:{color:tc,font:{size:10},maxTicksLimit:18},grid:{color:gc}},
+        y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(v)},grid:{color:gc},stacked:false},
+        y2:{position:'right',ticks:{color:'rgba(180,100,0,0.8)',font:{size:9},callback:v=>v+'%'},grid:{display:false},display:irrSlice.some(v=>v!=null)},
+      }
+    }
+  });
+
+  // ── MoM table ────────────────────────────────────────────────
+  const fmt=v=>v!=null&&v!==0?(v>0?'<span class="up">+'+inrK(v)+'</span>':'<span class="dn">'+inrK(v)+'</span>'):'—';
+  const fmtV=v=>v!=null?inrK(v):'—';
+  const tbody=document.getElementById('mom-body');
+  const tableRows=data.filter(r=>r.buy||r.sell||r.div||r.closeVal);
+  if(!tableRows.length){tbody.innerHTML='<tr><td colspan="8" style="padding:16px;text-align:center;color:var(--text3)">No data</td></tr>';return;}
+  tbody.innerHTML=tableRows.map((r,i)=>{
+    const irr=irrSlice[data.indexOf(r)];
+    const irrCell=irr!=null?`<span class="${irr>=0?'up':'dn'}">${irr>0?'+':''}${irr}%</span>`:'—';
+    return`<tr>
+      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);white-space:nowrap">${r.label}</td>
+      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${fmtV(r.openVal||0)}</td>
+      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${r.buy?'<span class="up">'+inrK(r.buy)+'</span>':'—'}</td>
+      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${r.sell?'<span class="dn">'+inrK(r.sell)+'</span>':'—'}</td>
+      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${r.div?'<span class="up">'+inrK(r.div)+'</span>':'—'}</td>
+      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${fmt(r.mktMove)}</td>
+      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right;font-weight:500">${fmtV(r.closeVal)}</td>
+      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${irrCell}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ── Upload history ───────────────────────────────────────────
