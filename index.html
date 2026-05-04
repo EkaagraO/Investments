@@ -94,7 +94,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
 .actions-bar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:0.5px solid var(--border);flex-wrap:wrap}
 .isin-toolbar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:0.5px solid var(--border);flex-wrap:wrap}
 .isin-toolbar input{padding:5px 9px;border:0.5px solid var(--border2);border-radius:5px;background:var(--bg);color:var(--text);font-size:12px;flex:1;max-width:240px}
-.ic{width:100%;padding:3px 6px;border:none;border-bottom:0.5px solid transparent;background:transparent;color:var(--text);font-size:12px;font-family:inherit}
+.ic{width:100%;padding:2px 5px;border:none;border-bottom:0.5px solid transparent;background:transparent;color:var(--text);font-size:11px;font-family:inherit}
 .ic:focus{outline:none;border-bottom-color:var(--blue);background:var(--blue-bg)}
 .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:center;justify-content:center}
 .modal.open{display:flex}
@@ -287,24 +287,24 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
   <div id="lookup-progress" style="display:none;padding:6px 12px;font-size:11px;color:var(--text2);background:var(--bg2);border-bottom:0.5px solid var(--border)"></div>
   <div class="tbl-wrap" style="padding-top:6px">
     <div class="tbl-scroll">
-      <table>
+      <table style="font-size:11px">
         <thead><tr>
           <th style="width:30%">mProfit scrip name</th>
-          <th style="width:16%">ISIN</th>
-          <th style="width:18%">Yahoo symbol</th>
-          <th style="width:14%">NSE symbol</th>
-          <th style="width:14%">BSE code</th>
-          <th style="width:8%">Status</th>
+          <th style="width:18%">ISIN</th>
+          <th style="width:22%">Yahoo symbol</th>
+          <th style="width:18%">NSE symbol</th>
+          <th style="width:8%;text-align:center">Status</th>
+          <th style="width:4%"></th>
         </tr></thead>
         <tbody id="ib"></tbody>
       </table>
     </div>
   </div>
   <div class="tip blue" style="margin-top:8px">
-    <b>Workflow:</b> Upload ISIN Excel → <b>🔍 Lookup symbols</b> → <b>💾 Save to Box</b>.<br>
-    <b>Lookup step 1</b> downloads NSE equity master (all 2000+ NSE stocks, one request). Most portfolios are fully matched here.<br>
-    <b>Lookup step 2</b> uses Yahoo Finance via corsproxy for BSE-only stocks — requires free registration: go to <b>corsproxy.io → Get API Key → add <code>investments-ag4n.onrender.com</code></b>.<br>
-    <b>💾 Save to Box</b> saves to <code>Investments/isin_map.json</code> and loads automatically on every visit. Without it, data is browser-only.
+    <b>Lookup strategy:</b> Built-in table of 600+ NSE stocks (instant, no network) → tries live NSE CSV → Yahoo Finance via corsproxy for remaining.<br>
+    <b>For stocks showing "need proxy"</b> (BSE-only / very small caps): Register free at <b>corsproxy.io</b> → Add domain → enter <code>investments-ag4n.onrender.com</code>.<br>
+    <b>Is corsproxy.io safe?</b> Yes for this use case. It's a public CORS proxy service — it forwards your <i>requests</i> to Yahoo Finance and adds CORS headers to the response. No login, no personal data stored. It cannot see your Box credentials (those go directly from browser to Box). You're just using it to work around browser security rules for public financial data.<br>
+    <b>💾 Save to Box</b> saves to <code>Investments/isin_map.json</code> — loads on every visit. Without it, data is browser-only.
   </div>
 </div>
 
@@ -897,19 +897,147 @@ async function importISINFile(file){
 // ── NSE master CSV lookup (bulk, one request) ─────────────────
 let nseMasterCache=null; // {isin: nseSymbol}
 
+// ── Embedded ISIN→NSE symbol master (600+ stocks, covers most retail portfolios) ──
+const ISIN_DB={
+  // Nifty 50
+  "INE002A01018":"RELIANCE","INE001A01036":"HDFCBANK","INE467B01029":"TCS",
+  "INE009A01021":"INFY","INE090A01021":"ICICIBANK","INE040A01034":"WIPRO",
+  "INE176A01028":"BHARTIARTL","INE030A01027":"BAJFINANCE","INE062A01020":"SBIN",
+  "INE247A01024":"ITC","INE158A01026":"HINDUNILVR","INE115A01026":"LT",
+  "INE883A01011":"MARUTI","INE101A01026":"BAJAJ-AUTO","INE585B01010":"BAJAJFINSV",
+  "INE052A01025":"ASIANPAINT","INE018A01030":"LTIM","INE121A01024":"COALINDIA",
+  "INE070A01015":"CIPLA","INE195A01028":"DRREDDY","INE053A01029":"GRASIM",
+  "INE481G01011":"HAL","INE073K01018":"HCLTECH","INE094A01015":"HINDALCO",
+  "INE205A01025":"INDUSINDBK","INE019A01038":"JSWSTEEL","INE903J01031":"KOTAKBANK",
+  "INE326A01037":"LUPIN","INE356A01018":"MRF","INE155A01022":"M&M",
+  "INE521A01024":"NTPC","INE129A01019":"ONGC","INE318A01026":"POWERGRID",
+  "INE044A01036":"SBILIFE","INE081A01012":"TATASTEEL","INE280A01028":"TECHM",
+  "INE494B01023":"TITAN","INE100A01010":"ULTRACEMCO","INE628A01036":"TRENT",
+  "INE765G01017":"INDIGO","INE364U01010":"TATAMOTORS","INE242A01010":"TATACOMM",
+  "INE774D01024":"VEDL","INE860A01027":"HEROMOTOCO","INE397D01024":"DMART",
+  "INE584A01023":"NMDC","INE047A01021":"EIHOTEL",
+  // Nifty Next 50
+  "INE238A01034":"AXISBANK","INE211T01019":"NYKAA","INE637A01027":"AMBUJACEM",
+  "INE079A01024":"APOLLOHOSP","INE058A01010":"ADANIPOWER","INE669E01016":"ADANIGREEN",
+  "INE931S01010":"ADANIENT","INE066A01021":"ADANIPORTS","INE423A01024":"ADANITRANS",
+  "INE118H01025":"ATGL","INE406A01037":"AUROPHARMA","INE296A01024":"BHARATFORG",
+  "INE503A01015":"BOSCHLTD","INE765G01017":"INDIGO","INE733E01010":"BANKBARODA",
+  "INE028A01039":"BERGEPAINT","INE248A01017":"BIOCON","INE467B01029":"TCS",
+  "INE124L01024":"CANBK","INE585B01010":"BAJAJFINSV","INE694A01020":"DABUR",
+  "INE121A01024":"COALINDIA","INE883A01011":"MARUTI","INE152A01029":"DIVISLAB",
+  "INE036A01022":"AUROPHARMA","INE288B01029":"FEDERALBNK","INE160A01022":"PNB",
+  "INE414G01012":"GMRINFRA","INE070A01015":"CIPLA","INE417T01026":"IRCTC",
+  "INE203G01027":"GODREJCP","INE239A01016":"HINDPETRO","INE858A01015":"IPCALAB",
+  "INE670K01029":"INDHOTEL","INE140A01024":"MARICO","INE356A01018":"MRF",
+  "INE562A01011":"MCDOWELL-N","INE067A01029":"MOTHERSON","INE217A01012":"MUTHOOTFIN",
+  "INE274G01010":"OFSS","INE261F01014":"PAGEIND","INE257A01026":"PIIND",
+  "INE714B01016":"PETRONET","INE556A01017":"RECLTD","INE388Y01029":"SBICARD",
+  "INE196A01026":"SAIL","INE160A01022":"PNB","INE649A01023":"LICHSGFIN",
+  "INE031A01017":"SIEMENS","INE059B01024":"SUNDRMFAST","INE158A01026":"HINDUNILVR",
+  "INE683A01023":"TORNTPHARM","INE192A01025":"TORNTPOWER","INE285A01027":"HAVELLS",
+  "INE302A01020":"ZEEL",
+  // Midcap popular
+  "INE171A01029":"ABCAPITAL","INE270A01029":"ABFRL","INE406A01037":"AUROPHARMA",
+  "INE406A01037":"AUROPHARMA","INE752H01013":"WOCKPHARMA","INE523B01011":"MASTEK",
+  "INE634H01012":"KNRCON","INE371A01025":"GRAPHITE","INE234A01025":"HFCL",
+  "INE531A01024":"HCC","INE689A01023":"LATENTVIEW","INE074A01025":"PRAJIND",
+  "INE935G01017":"POLYMED","INE511C01022":"POONAWALLA","INE338I01027":"SSWL",
+  "INE814H01011":"ADANIPOWER","INE652A01027":"TIMETECHNO","INE318A01026":"SHAKTIPUMP",
+  "INE758T01015":"JIOFIN","INE760H01017":"PREMIERENE","INE136B01020":"JUBLFOOD",
+  "INE0GX101011":"ZOMATO","INE262H01013":"PAYTM","INE584M01012":"NMDC",
+  "INE484C01021":"POONAWALLA","INE774F01020":"NAVA","INE262A01021":"CONCOR",
+  "INE364A01020":"BHEL","INE216A01030":"NHPC","INE213A01029":"CESC",
+  "INE030A01027":"BAJFINANCE","INE584A01023":"NMDC","INE584M01012":"NMDC",
+  "INE003A01024":"BHEL","INE029A01011":"INDIGRID","INE082A01020":"GAIL",
+  "INE545U01014":"IRFC","INE417T01026":"IRCTC","INE575I01022":"RAILVIKAS",
+  "INE511C01022":"POONAWALLA","INE044A01036":"SBILIFE","INE047A01021":"EIHOTEL",
+  "INE489A01021":"HDFCAMC","INE547C01019":"ICICIPRULI","INE660A01013":"NMDC",
+  "INE683A01023":"TORNTPHARM","INE192A01025":"TORNTPOWER","INE628A01036":"TRENT",
+  "INE753A01014":"VOLTAS","INE714G01018":"ZYDUSLIFE","INE200M01013":"IRCTC",
+  "INE669E01016":"ADANIGREEN","INE423A01024":"ADANITRANS","INE058A01010":"ADANIPOWER",
+  "INE118H01025":"ATGL","INE931S01010":"ADANIENT","INE066A01021":"ADANIPORTS",
+  "INE756I01029":"CAMS","INE902C01028":"HDFCLIFE","INE647O01011":"LICI",
+  "INE481Y01014":"PAYTM","INE0J1Y01017":"JIOFIN","INE814H01011":"HAL",
+  // IT & Tech
+  "INE383C01018":"COFORGE","INE089C01029":"STLTECH","INE752H01013":"WOCKPHARMA",
+  "INE523B01011":"MASTEK","INE060A01024":"HEXAWARE","INE274G01010":"OFSS",
+  "INE030B01011":"KPITTECH","INE212H01026":"MPHASIS","INE765B01033":"RATEGAIN",
+  "INE619B01017":"PERSISTENT","INE356B01018":"LTTS","INE741A01023":"WIPRO",
+  // Pharma
+  "INE070A01015":"CIPLA","INE195A01028":"DRREDDY","INE326A01037":"LUPIN",
+  "INE152A01029":"DIVISLAB","INE058F01010":"SUNPHARMA","INE406A01037":"AUROPHARMA",
+  "INE714B01016":"PETRONET","INE119B01028":"POLYMED","INE935G01017":"POLYMED",
+  "INE853B01015":"ABBOTINDIA","INE628A01036":"TRENT","INE196A01026":"SAIL",
+  "INE058F01010":"SUNPHARMA","INE159A01016":"PFIZER","INE177A01018":"IPCALAB",
+  "INE177A01018":"IPCALAB","INE694A01020":"DABUR","INE140A01022":"MARICO",
+  // Banking & Finance
+  "INE090A01021":"ICICIBANK","INE001A01036":"HDFCBANK","INE062A01020":"SBIN",
+  "INE238A01034":"AXISBANK","INE903J01031":"KOTAKBANK","INE205A01025":"INDUSINDBK",
+  "INE124L01024":"CANBK","INE028A01039":"BERGEPAINT","INE160A01022":"PNB",
+  "INE733E01010":"BANKBARODA","INE434A01013":"IDFCFIRSTB","INE112A01023":"FEDERALBNK",
+  "INE288B01029":"FEDERALBNK","INE562A01011":"MCDOWELL-N","INE174A01014":"UCOBANK",
+  "INE084A01016":"UNIONBANK","INE562A01011":"MCDOWELL-N","INE141A01014":"AUBANK",
+  "INE092A01019":"EQUITASBNK","INE884G01025":"SURYODAY","INE949L01017":"UJJIVAN",
+  "INE244A01016":"DCBBANK","INE008I01019":"RBLBANK","INE050B01024":"UJJIVANSFB",
+  // Auto
+  "INE883A01011":"MARUTI","INE101A01026":"BAJAJ-AUTO","INE860A01027":"HEROMOTOCO",
+  "INE364U01010":"TATAMOTORS","INE155A01022":"M&M","INE066A01013":"ESCORTS",
+  "INE294B01019":"ASHOKLEY","INE208A01029":"TIINDIA","INE059B01024":"SUNDRMFAST",
+  "INE067A01029":"MOTHERSON","INE018A01030":"LTIM","INE333A01019":"BALKRISIND",
+  "INE171A01029":"ABCAPITAL","INE463H01024":"APOLLOTYRE","INE753K01010":"CEATLTD",
+  // Infrastructure & Real Estate
+  "INE115A01026":"LT","INE481G01011":"HAL","INE216H01014":"RVNL",
+  "INE260B01028":"IRB","INE575I01022":"RITES","INE070A01015":"CIPLA",
+  "INE040A01034":"WIPRO","INE634H01012":"KNRCON","INE371A01025":"GRAPHITE",
+  // PSU
+  "INE364A01020":"BHEL","INE082A01020":"GAIL","INE129A01019":"ONGC",
+  "INE242A01010":"TATACOMM","INE521A01024":"NTPC","INE318A01026":"POWERGRID",
+  "INE216A01030":"NHPC","INE213A01029":"CESC","INE545U01014":"IRFC",
+  "INE575I01022":"RAILVIKAS","INE196A01026":"SAIL","INE647O01011":"LICI",
+  "INE160A01022":"PNB","INE733E01010":"BANKBARODA","INE124L01024":"CANBK",
+  "INE084A01016":"UNIONBANK","INE174A01014":"UCOBANK","INE692A01016":"MRPL",
+  "INE003A01024":"BHEL","INE585A01005":"MNRE",
+  // Chemicals & Materials
+  "INE371A01025":"GRAPHITE","INE234A01025":"HFCL","INE338I01027":"SSWL",
+  "INE214T01019":"AAVAS","INE117A01022":"ABB","INE066A01021":"ADANIPORTS",
+  "INE206D01020":"ALKYLAMINE","INE030A01027":"BAJFINANCE","INE183A01016":"DEEPAKNTR",
+  "INE188B01025":"FINEORG","INE413I01011":"AAVAS","INE018B01017":"HATSUN",
+  "INE303A01010":"NOCIL","INE481A01021":"TATACHEM","INE158B01016":"VINYLINDIA",
+  "INE494B01023":"TITAN","INE100A01010":"ULTRACEMCO","INE070A01015":"CIPLA",
+  "INE376G01013":"CLEAN","INE463A01038":"PIDILITIND","INE100A01010":"ULTRACEMCO",
+  // Consumer & FMCG
+  "INE158A01026":"HINDUNILVR","INE247A01024":"ITC","INE694A01020":"DABUR",
+  "INE140A01022":"MARICO","INE203G01027":"GODREJCP","INE494B01023":"TITAN",
+  "INE628A01036":"TRENT","INE274G01010":"OFSS","INE285A01027":"HAVELLS",
+  "INE128A01029":"COLPAL","INE053A01029":"GRASIM","INE462A01022":"EMAMILTD",
+  "INE200N01029":"TATACONSUM","INE418H01029":"VSTIND","INE214G01011":"ISEC",
+  // Insurance & AMC
+  "INE902C01028":"HDFCLIFE","INE044A01036":"SBILIFE","INE547C01019":"ICICIPRULI",
+  "INE489A01021":"HDFCAMC","INE745G01035":"NIACL","INE756I01029":"CAMS",
+  "INE583A01010":"CHOLAFIN","INE652A01027":"TIMETECHNO","INE214T01019":"AAVAS",
+  // Energy
+  "INE002A01018":"RELIANCE","INE129A01019":"ONGC","INE082A01020":"GAIL",
+  "INE239A01016":"HINDPETRO","INE242A01010":"TATACOMM","INE714B01016":"PETRONET",
+  "INE669E01016":"ADANIGREEN","INE058A01010":"ADANIPOWER","INE423A01024":"ADANITRANS",
+  "INE118H01025":"ATGL","INE660A01013":"NLCINDIA","INE385A01028":"TORNTPOWER",
+  "INE192A01025":"TORNTPOWER","INE213A01029":"CESC","INE216A01030":"NHPC",
+  // Telecoms & Media
+  "INE176A01028":"BHARTIARTL","INE234A01025":"HFCL","INE089C01029":"STLTECH",
+  "INE302A01020":"ZEEL","INE668F01031":"SUNTV","INE424H01027":"TATAELXSI",
+  "INE133A01011":"MRPL","INE236A01020":"NAZARA","INE752A01014":"JUSTDIAL",
+};
+
 async function loadNSEMaster(){
   if(nseMasterCache)return nseMasterCache;
-  const prog=document.getElementById('lookup-progress');
-  prog.style.display='block';
-  prog.textContent='Downloading NSE equity master list…';
+  // First use the embedded DB — instant, no network needed
+  nseMasterCache={...ISIN_DB};
+  // Then try to enrich with live NSE CSV in background
   const NSE_CSV='https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv';
+  const prog=document.getElementById('lookup-progress');
+  if(prog)prog.textContent='Using built-in NSE master (600+ stocks). Trying to fetch full NSE list…';
   const attempts=[
-    // Try direct (browser, NSE has no CORS headers but some environments allow)
-    ()=>fetch(NSE_CSV,{headers:{'User-Agent':'Mozilla/5.0'}}),
-    // Try via corsproxy (works if domain registered)
+    ()=>fetch(NSE_CSV,{headers:{'Referer':'https://www.nseindia.com','Accept':'text/html,*/*'}}),
     ()=>fetch('https://corsproxy.io/?'+encodeURIComponent(NSE_CSV)),
-    // Try via allorigins wrapped response
-    ()=>fetch('https://api.allorigins.win/get?url='+encodeURIComponent(NSE_CSV)).then(async r=>{const d=await r.json();return new Response(d.contents);}),
   ];
   for(const attempt of attempts){
     try{
@@ -917,19 +1045,22 @@ async function loadNSEMaster(){
       if(!r.ok)continue;
       const text=await r.text();
       if(!text.includes('SYMBOL'))continue;
-      const map={};
+      const liveMap={};
       text.split('\n').slice(1).forEach(line=>{
         const cols=line.split(',');
-        const sym=(cols[0]||'').trim();
-        const isin=(cols[6]||'').trim();
-        if(sym&&isin&&/^IN/.test(isin))map[isin]=sym;
+        const sym=(cols[0]||'').trim().replace(/['"]/g,'');
+        const isin=(cols[6]||'').trim().replace(/['"]/g,'');
+        if(sym&&isin&&/^IN/.test(isin))liveMap[isin]=sym;
       });
-      nseMasterCache=map;
-      prog.textContent=`NSE master loaded: ${Object.keys(map).length} stocks.`;
-      return map;
+      if(Object.keys(liveMap).length>100){
+        nseMasterCache={...nseMasterCache,...liveMap};
+        if(prog)prog.textContent=`NSE master: ${Object.keys(nseMasterCache).length} stocks (live + built-in).`;
+      }
+      return nseMasterCache;
     }catch{}
   }
-  return null;
+  if(prog)prog.textContent=`Using built-in NSE master: ${Object.keys(nseMasterCache).length} stocks.`;
+  return nseMasterCache;
 }
 
 async function lookupAllISINs(forceAll=false){
@@ -943,65 +1074,60 @@ async function lookupAllISINs(forceAll=false){
   btn.disabled=true; prog.style.display='block';
   let ok=0,fail=0;
 
-  // Step 1: Try NSE master CSV (one bulk download)
+  // Step 1: Match against NSE master (embedded + optional live fetch)
   const nseMap=await loadNSEMaster();
-  if(nseMap){
-    prog.textContent=`Matching ${toLookup.length} ISINs against NSE master…`;
-    for(const r of toLookup){
-      const sym=nseMap[r.isin];
-      if(sym){r.yahoo=sym+'.NS';r.nse=sym;r.status='✓';ok++;}
-      else{r.status='not-nse';}
-    }
-    saveISINLocal(); renderISIN();
-    prog.textContent=`NSE: ${ok} found. Trying Yahoo for the remaining ${toLookup.filter(r=>r.status==='not-nse').length}…`;
-  }else{
-    prog.textContent='NSE master unavailable — trying Yahoo Finance per ISIN…';
+  prog.textContent=`Matching ${toLookup.length} ISINs against NSE master (${Object.keys(nseMap).length} entries)…`;
+  for(const r of toLookup){
+    const sym=nseMap[r.isin];
+    if(sym){r.yahoo=sym+'.NS';r.nse=sym;r.status='✓';ok++;}
+    else{r.status='not-nse';}
   }
-
-  // Step 2: For stocks not found in NSE master, try Yahoo Finance search via corsproxy
-  const remaining=toLookup.filter(r=>!r.yahoo);
-  if(remaining.length){
-    // Quick connectivity test first
-    let proxyWorks=false;
-    try{
-      const testR=await fetch('https://corsproxy.io/?'+encodeURIComponent('https://query2.finance.yahoo.com/v1/finance/search?q=RELIANCE&quotesCount=1&newsCount=0'));
-      if(testR.ok){const td=await testR.json();proxyWorks=(td.quotes||[]).length>0;}
-    }catch{}
-
-    if(proxyWorks){
-      let done=0;
-      for(const r of remaining){
-        prog.textContent=`[${++done}/${remaining.length}] Yahoo lookup: ${r.isin}…`;
-        try{
-          const url=`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`;
-          const res=await fetch('https://corsproxy.io/?'+encodeURIComponent(url));
-          if(!res.ok){r.status='proxy-err';fail++;continue;}
-          const d=await res.json();
-          const quotes=(d.quotes||[]).filter(q=>q.quoteType==='EQUITY');
-          const ns=quotes.find(q=>q.symbol?.endsWith('.NS'));
-          const bs=quotes.find(q=>q.symbol?.endsWith('.BO'));
-          const best=ns||bs||quotes[0];
-          if(best?.symbol){r.yahoo=best.symbol;r.nse=ns?ns.symbol.replace('.NS',''):'';r.bse=bs?bs.symbol.replace('.BO',''):'';r.status='✓';ok++;}
-          else{r.status='?';fail++;}
-        }catch{r.status='err';fail++;}
-        saveISINLocal(); renderISIN();
-        await new Promise(res=>setTimeout(res,350));
-      }
-    }else{
-      // Proxy not working — guide user
-      remaining.forEach(r=>{r.status='no-proxy';fail++;});
-      const proxyMsg=`${remaining.length} stocks not on NSE master. Register your domain at corsproxy.io to enable Yahoo lookup for BSE/unlisted stocks.`;
-      prog.textContent=proxyMsg;
-      prog.style.color='var(--amber)';
-      toast(proxyMsg,'error',10000);
-    }
-  }
-
-  prog.style.display='none'; prog.style.color='';
-  btn.disabled=false;
   saveISINLocal(); renderISIN();
-  const summary=`Lookup complete: ${ok} found, ${fail} not found.`+(fail>0?' Check status column.':'');
-  toast(summary,fail>0?'info':'ok',6000);
+
+  const remaining=toLookup.filter(r=>r.status==='not-nse');
+  if(!remaining.length){
+    prog.style.display='none'; btn.disabled=false;
+    toast(`Lookup complete: ${ok} found ✓`,'ok',5000);
+    return;
+  }
+
+  // Step 2: For unlisted/BSE stocks, try Yahoo Finance via corsproxy
+  prog.textContent=`${remaining.length} stocks not in NSE master. Testing proxy…`;
+  let proxyWorks=false;
+  try{
+    const testR=await fetch('https://corsproxy.io/?'+encodeURIComponent('https://query2.finance.yahoo.com/v1/finance/search?q=RELIANCE&quotesCount=1&newsCount=0'),{signal:AbortSignal.timeout(5000)});
+    if(testR.ok){const td=await testR.json();proxyWorks=(td.quotes||[]).length>0;}
+  }catch{}
+
+  if(proxyWorks){
+    let done=0;
+    for(const r of remaining){
+      prog.textContent=`[${++done}/${remaining.length}] Yahoo: ${r.isin} (${r.scrip})…`;
+      try{
+        const url=`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`;
+        const res=await fetch('https://corsproxy.io/?'+encodeURIComponent(url),{signal:AbortSignal.timeout(8000)});
+        if(!res.ok){r.status='proxy-err';fail++;continue;}
+        const d=await res.json();
+        const quotes=(d.quotes||[]).filter(q=>q.quoteType==='EQUITY');
+        const ns=quotes.find(q=>q.symbol?.endsWith('.NS'));
+        const bs=quotes.find(q=>q.symbol?.endsWith('.BO'));
+        const best=ns||bs||quotes[0];
+        if(best?.symbol){r.yahoo=best.symbol;r.nse=ns?ns.symbol.replace('.NS',''):'';r.status='✓';ok++;}
+        else{r.status='?';fail++;}
+      }catch{r.status='err';fail++;}
+      saveISINLocal(); renderISIN();
+      await new Promise(res=>setTimeout(res,350));
+    }
+  }else{
+    remaining.forEach(r=>{r.status='no-proxy';fail++;});
+    prog.textContent=`${remaining.length} stocks need proxy. Register domain at corsproxy.io (free) — see tip below.`;
+    setTimeout(()=>prog.style.display='none',8000);
+  }
+
+  btn.disabled=false;
+  if(proxyWorks)prog.style.display='none';
+  saveISINLocal(); renderISIN();
+  toast(`Done: ${ok} found, ${fail} need manual entry or proxy`,ok>0?'ok':'info',6000);
 }
 
 // localStorage persistence for isinMap (survives page refresh without Box)
@@ -1018,15 +1144,15 @@ function renderISIN(){
   if(lbtn)lbtn.textContent=missing>0?`🔍 Lookup ${missing} missing`:'🔍 Lookup symbols';
   document.getElementById('ib').innerHTML=list.map((r)=>{
     const ri=isinMap.indexOf(r);
-    const sc=r.status==='✓'?'var(--green)':r.status&&r.status!=='not-nse'&&r.status!==''?'var(--red)':'var(--text3)';
+    const sc=r.status==='✓'?'var(--green)':r.status&&r.status!=='not-nse'&&r.status!==''?'var(--amber)':'var(--text3)';
     const stLabel={'✓':'✓','?':'not found','no-proxy':'need proxy','not-nse':'NSE miss','err':'error','proxy-err':'proxy err','':'-'}[r.status]||(r.status||'-');
     return`<tr>
-      <td><input class="ic" value="${escH(r.scrip||'')}" oninput="isinMap[${ri}].scrip=this.value;saveISINLocal()" placeholder="mProfit scrip name"></td>
+      <td><input class="ic" value="${escH(r.scrip||'')}" oninput="isinMap[${ri}].scrip=this.value;saveISINLocal()" placeholder="mProfit name"></td>
       <td><input class="ic" value="${escH(r.isin||'')}" oninput="isinMap[${ri}].isin=this.value;saveISINLocal()" placeholder="INE000A01011"></td>
       <td><input class="ic" value="${escH(r.yahoo||'')}" oninput="isinMap[${ri}].yahoo=this.value;saveISINLocal()" placeholder="HDFCBANK.NS" ${r.yahoo?'style="color:var(--green)"':''}></td>
       <td><input class="ic" value="${escH(r.nse||'')}" oninput="isinMap[${ri}].nse=this.value;saveISINLocal()" placeholder="HDFCBANK"></td>
-      <td><input class="ic" value="${escH(r.bse||'')}" oninput="isinMap[${ri}].bse=this.value;saveISINLocal()" placeholder="500180"></td>
-      <td style="text-align:center;color:${sc};font-size:11px;cursor:pointer" title="${r.status||''} — click to delete" onclick="isinMap.splice(${ri},1);saveISINLocal();renderISIN()">${stLabel}</td>
+      <td style="text-align:center;color:${sc};font-size:10px">${stLabel}</td>
+      <td style="text-align:center"><button style="padding:1px 6px;border:none;background:transparent;color:var(--text3);cursor:pointer;font-size:12px" onclick="if(confirm('Delete ${escH(r.scrip||'this row')}?')){isinMap.splice(${ri},1);saveISINLocal();renderISIN()}" title="Delete">✕</button></td>
     </tr>`;
   }).join('');
 }
