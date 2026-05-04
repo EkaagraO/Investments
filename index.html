@@ -278,9 +278,10 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
     <button class="btn sm" onclick="document.getElementById('isin-file').click()">⬆ Upload Excel/CSV</button>
     <input type="file" id="isin-file" style="display:none" accept=".csv,.xlsx,.xls" onchange="importISINFile(this.files[0]);this.value=''">
     <button class="btn sm" id="lookup-btn" onclick="lookupAllISINs(false)">🔍 Lookup symbols</button>
-    <button class="btn sm" onclick="lookupAllISINs(true)" title="Re-fetch symbols for ALL rows, even those already filled">↺ Re-lookup all</button>
+    <button class="btn sm" onclick="lookupAllISINs(true)" title="Re-fetch all rows even if already filled">↺ Re-lookup all</button>
+    <button class="btn sm" onclick="clearISINSymbols()" title="Reset all Yahoo/NSE symbols so you can re-run lookup fresh">🗑 Clear symbols</button>
     <button class="btn sm" onclick="dlISINMap()">⬇ Download CSV</button>
-    <button class="btn sm primary" onclick="saveISIN()" title="Saves ISIN map to your Box account so it loads automatically on every visit">💾 Save to Box</button>
+    <button class="btn sm primary" onclick="saveISIN()" title="Saves to Box — loads automatically on every visit">💾 Save to Box</button>
     <button class="btn sm" onclick="addISINRow()">+ Add row</button>
     <button class="btn sm" onclick="autoFill()">Auto-fill from transactions</button>
   </div>
@@ -301,11 +302,12 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
     </div>
   </div>
   <div class="tip blue" style="margin-top:8px">
-    <b>Lookup strategy (no proxy needed):</b><br>
-    Step 1: Built-in table of 600+ NSE stocks — instant, covers most retail portfolios.<br>
-    Step 2: Yahoo Finance search API called directly from your browser (no proxy) for remaining stocks.<br>
-    Step 3: If a stock still shows <b>?</b>, enter the Yahoo symbol manually (e.g. <code>HDFCBANK.NS</code> for NSE, <code>HDFCBANK.BO</code> for BSE).<br>
-    <b>💾 Save to Box</b> saves to <code>Investments/isin_map.json</code> — loads on every visit. Without it, data is browser-only.
+    <b>Lookup strategy (no external registration needed):</b><br>
+    Step 1 — Built-in table of ~200 confirmed NSE stocks (instant).<br>
+    Step 2 — Yahoo Finance search API using your <b>existing browser session</b>. This works because Yahoo Finance uses a session token (crumb) that the browser already has if you've visited finance.yahoo.com. <b>If lookup returns "?" for stocks: open <a href="https://finance.yahoo.com" target="_blank" style="color:var(--blue)">finance.yahoo.com</a> in a new tab, then come back and retry.</b><br>
+    If a stock still shows <b>?</b> after that, type the Yahoo symbol manually — e.g. <code>HDFCBANK.NS</code> for NSE, <code>500180.BO</code> for BSE.<br>
+    <b>🗑 Clear symbols</b> — use this if old/wrong symbols (like HDFCBANK.NS for everything) are stuck. Clears symbols without deleting your ISIN/scrip data.<br>
+    <b>💾 Save to Box</b> syncs to <code>Investments/isin_map.json</code> — loads on every visit automatically.
   </div>
 </div>
 
@@ -337,6 +339,25 @@ const REDIRECT=location.origin+location.pathname;
 const FOLDER='Investments';
 const YF1='https://query1.finance.yahoo.com';
 const YF2='https://query2.finance.yahoo.com';
+
+// ── Yahoo Finance session (crumb) ────────────────────────────
+// Yahoo Finance requires a session crumb for all API calls since late 2024.
+// The crumb is tied to the browser's yahoo.com cookies. If the user has
+// visited finance.yahoo.com recently, this works silently.
+let yfCrumb=null;
+async function getYFCrumb(){
+  if(yfCrumb)return yfCrumb;
+  try{
+    // Try to get crumb using existing browser Yahoo cookies
+    const r=await fetch(`${YF1}/v1/test/getcrumb`,{credentials:'include',headers:{Accept:'text/plain,*/*'}});
+    if(r.ok){const t=(await r.text()).trim();if(t&&t.length>2){yfCrumb=t;return t;}}
+  }catch{}
+  try{
+    const r=await fetch(`${YF2}/v1/test/getcrumb`,{credentials:'include',headers:{Accept:'text/plain,*/*'}});
+    if(r.ok){const t=(await r.text()).trim();if(t&&t.length>2){yfCrumb=t;return t;}}
+  }catch{}
+  return null; // No crumb — will try requests without it
+}
 
 // ── State ───────────────────────────────────────────────────
 let bToken=null,fId=null;
@@ -449,32 +470,45 @@ function toYF(scrip){
   return k.replace(/\s+/g,'').replace(/[^A-Z0-9&]/g,'')+'.NS';
 }
 async function fetchYF(sym){
-  // Yahoo Finance chart API serves Access-Control-Allow-Origin: * — no proxy needed
-  const endpoints=[
-    `${YF1}/v8/finance/chart/${encodeURIComponent(sym)}?range=7y&interval=1mo`,
-    `${YF2}/v8/finance/chart/${encodeURIComponent(sym)}?range=7y&interval=1mo`,
-  ];
-  for(const url of endpoints){
+  const crumb=await getYFCrumb();
+  const cq=crumb?`&crumb=${encodeURIComponent(crumb)}`:'';
+  const creds=crumb?'include':'omit';
+  for(const base of[YF1,YF2]){
     try{
-      const r=await fetch(url,{signal:AbortSignal.timeout(10000)});
+      const url=`${base}/v8/finance/chart/${encodeURIComponent(sym)}?range=7y&interval=1mo${cq}`;
+      const r=await fetch(url,{credentials:creds,headers:{Accept:'application/json'}});
       if(!r.ok)continue;
       const d=await r.json();const res=d.chart?.result?.[0];if(!res)continue;
       const ts=res.timestamp,cl=res.indicators.quote[0].close,hist={};
       ts.forEach((t,i)=>{if(cl[i]!=null){const m=new Date(t*1000).toISOString().slice(0,7);hist[m]=cl[i];}});
-      return{current:cl.filter(Boolean).pop(),history:hist,updated:new Date().toISOString()};
+      const current=cl.filter(Boolean).pop();
+      if(!current)continue;
+      return{current,history:hist,updated:new Date().toISOString()};
     }catch{}
   }
   return null;
 }
 async function refreshPrices(){
   if(!bToken){toast('Connect Box first','error');return;}
-  const btn=document.getElementById('refresh-btn');btn.textContent='↻ Refreshing…';btn.disabled=true;
+  const btn=document.getElementById('refresh-btn');btn.textContent='↻ Getting session…';btn.disabled=true;
+  const crumb=await getYFCrumb();
+  if(!crumb)toast('No Yahoo session — open finance.yahoo.com in a tab, then retry for better results','info',5000);
+  btn.textContent='↻ Refreshing…';
   const syms=[...new Set(txns.filter(t=>t.type==='Buy'||t.type==='Sell').map(t=>toYF(t.scrip)))];
-  let ok=0;for(const s of syms){try{const d=await fetchYF(s);if(d){prices[s]=d;ok++;}}catch{}}
-  await bSave('prices.json',{updated:new Date().toISOString(),prices});
-  document.getElementById('price-age').textContent=`Updated just now · ${ok}/${syms.length} scrips`;
+  let ok=0,fail=0;
+  for(const s of syms){
+    try{const d=await fetchYF(s);if(d){prices[s]=d;ok++;}else fail++;}
+    catch{fail++;}
+  }
+  if(ok>0){
+    await bSave('prices.json',{updated:new Date().toISOString(),prices});
+    document.getElementById('price-age').textContent=`Updated just now · ${ok}/${syms.length} scrips`;
+    toast(`Prices refreshed: ${ok}/${syms.length} ✓`,'ok');
+  }else{
+    toast(`0/${syms.length} fetched. Open finance.yahoo.com in a new tab, then retry.`,'error',8000);
+  }
   btn.textContent='↻ Refresh prices';btn.disabled=false;
-  toast(`Prices refreshed: ${ok}/${syms.length} ✓`,'ok');renderAll();
+  if(ok>0)renderAll();
 }
 
 // ── mProfit parser ───────────────────────────────────────────
@@ -849,6 +883,12 @@ function autoFill(){
   isinMap=[...isinMap,...nr];saveISINLocal();renderISIN();toast(`Added ${nr.length} scrips to ISIN map`,'ok');
 }
 function addISINRow(){isinMap.push({scrip:'',isin:'',yahoo:'',nse:'',bse:'',status:''});saveISINLocal();renderISIN();}
+function clearISINSymbols(){
+  if(!confirm('Clear all Yahoo symbols, NSE symbols and status? ISINs and scrip names are kept. You can re-run Lookup after.'))return;
+  isinMap.forEach(r=>{r.yahoo='';r.nse='';r.status='';});
+  saveISINLocal();renderISIN();
+  toast('Symbols cleared — now click Lookup symbols','ok');
+}
 
 async function importISINFile(file){
   if(!file)return;
@@ -1102,16 +1142,19 @@ async function lookupAllISINs(forceAll=false){
     return;
   }
 
-  prog.textContent=`${remaining.length} not in NSE master. Trying Yahoo Finance search…`;
+  prog.textContent=`${remaining.length} not in embedded map. Getting Yahoo Finance session…`;
+  const crumb=await getYFCrumb();
+  const cq=crumb?`&crumb=${encodeURIComponent(crumb)}`:'';
+  const creds=crumb?'include':'omit';
+  if(!crumb)prog.textContent=`No Yahoo session found. Visit finance.yahoo.com once, then retry. Trying anyway…`;
   let done=0;
   for(const r of remaining){
     prog.textContent=`[${++done}/${remaining.length}] Yahoo search: ${r.scrip||r.isin}…`;
-    // Try Yahoo Finance search directly — serves CORS headers for search too
     let found=false;
     for(const base of[YF2,YF1]){
       try{
-        const url=`${base}/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`;
-        const res=await fetch(url,{signal:AbortSignal.timeout(8000)});
+        const url=`${base}/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false${cq}`;
+        const res=await fetch(url,{credentials:creds,headers:{Accept:'application/json'}});
         if(!res.ok)continue;
         const d=await res.json();
         const quotes=(d.quotes||[]).filter(q=>q.quoteType==='EQUITY');
