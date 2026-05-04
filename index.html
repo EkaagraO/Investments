@@ -302,12 +302,11 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
     </div>
   </div>
   <div class="tip blue" style="margin-top:8px">
-    <b>Lookup strategy (no external registration needed):</b><br>
-    Step 1 — Built-in table of ~200 confirmed NSE stocks (instant).<br>
-    Step 2 — Yahoo Finance search API using your <b>existing browser session</b>. This works because Yahoo Finance uses a session token (crumb) that the browser already has if you've visited finance.yahoo.com. <b>If lookup returns "?" for stocks: open <a href="https://finance.yahoo.com" target="_blank" style="color:var(--blue)">finance.yahoo.com</a> in a new tab, then come back and retry.</b><br>
-    If a stock still shows <b>?</b> after that, type the Yahoo symbol manually — e.g. <code>HDFCBANK.NS</code> for NSE, <code>500180.BO</code> for BSE.<br>
-    <b>🗑 Clear symbols</b> — use this if old/wrong symbols (like HDFCBANK.NS for everything) are stuck. Clears symbols without deleting your ISIN/scrip data.<br>
-    <b>💾 Save to Box</b> syncs to <code>Investments/isin_map.json</code> — loads on every visit automatically.
+    <b>Step 1</b> — Built-in map of ~200 confirmed stocks. Instant, no network.<br>
+    <b>Step 2</b> — Calls your Python API (set URL in ⚙ Settings) which uses <code>yfinance</code> server-side.<br>
+    If a stock still shows <b>?</b>, type its Yahoo symbol manually: <code>HDFCBANK.NS</code> (NSE) or <code>500180.BO</code> (BSE).<br>
+    <b>🗑 Clear symbols</b> — removes stale/wrong symbols so you can re-run lookup fresh.<br>
+    <b>💾 Save to Box</b> syncs to <code>Investments/isin_map.json</code> and loads automatically on every visit.
   </div>
 </div>
 
@@ -318,11 +317,17 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
   <div class="modal-box">
     <h2>Settings</h2>
     <div id="box-status">Box: not connected</div>
+    <div class="field">
+      <label>Price API URL <span style="font-size:10px;text-transform:none;letter-spacing:0;color:var(--text3)">your Render investment-api service</span></label>
+      <input type="text" id="s-api" placeholder="https://investment-api.onrender.com">
+      <div style="font-size:10.5px;color:var(--text3);margin-top:3px">Deploy the investment_api folder as a Python web service on Render. Paste the URL here.</div>
+    </div>
     <div class="field"><label>Box Client ID</label><input type="text" id="sc" placeholder="Your Box app Client ID"></div>
     <div class="field"><label>Box Client Secret</label><input type="password" id="ss" placeholder="Your Box app Client Secret"></div>
     <div class="field"><label>Anthropic API Key <span style="font-size:10px;text-transform:none;letter-spacing:0">(optional)</span></label><input type="password" id="sa" placeholder="sk-ant-api03-..."></div>
     <div class="btn-row">
       <button class="btn primary" onclick="saveAuth()">Save &amp; Authorise Box</button>
+      <button class="btn" onclick="saveSettingsOnly()">Save settings</button>
       <button class="btn" onclick="closeModal()">Close</button>
     </div>
   </div>
@@ -337,27 +342,9 @@ const BOX_API='https://api.box.com/2.0';
 const BOX_UP='https://upload.box.com/api/2.0';
 const REDIRECT=location.origin+location.pathname;
 const FOLDER='Investments';
-const YF1='https://query1.finance.yahoo.com';
-const YF2='https://query2.finance.yahoo.com';
-
-// ── Yahoo Finance session (crumb) ────────────────────────────
-// Yahoo Finance requires a session crumb for all API calls since late 2024.
-// The crumb is tied to the browser's yahoo.com cookies. If the user has
-// visited finance.yahoo.com recently, this works silently.
-let yfCrumb=null;
-async function getYFCrumb(){
-  if(yfCrumb)return yfCrumb;
-  try{
-    // Try to get crumb using existing browser Yahoo cookies
-    const r=await fetch(`${YF1}/v1/test/getcrumb`,{credentials:'include',headers:{Accept:'text/plain,*/*'}});
-    if(r.ok){const t=(await r.text()).trim();if(t&&t.length>2){yfCrumb=t;return t;}}
-  }catch{}
-  try{
-    const r=await fetch(`${YF2}/v1/test/getcrumb`,{credentials:'include',headers:{Accept:'text/plain,*/*'}});
-    if(r.ok){const t=(await r.text()).trim();if(t&&t.length>2){yfCrumb=t;return t;}}
-  }catch{}
-  return null; // No crumb — will try requests without it
-}
+// ── Price API (Python backend on Render — handles Yahoo Finance) ──
+// After deploying investment-api, paste its URL in Settings or here:
+let API_BASE=localStorage.getItem('inv_api_url')||'';
 
 // ── State ───────────────────────────────────────────────────
 let bToken=null,fId=null;
@@ -470,45 +457,42 @@ function toYF(scrip){
   return k.replace(/\s+/g,'').replace(/[^A-Z0-9&]/g,'')+'.NS';
 }
 async function fetchYF(sym){
-  const crumb=await getYFCrumb();
-  const cq=crumb?`&crumb=${encodeURIComponent(crumb)}`:'';
-  const creds=crumb?'include':'omit';
-  for(const base of[YF1,YF2]){
-    try{
-      const url=`${base}/v8/finance/chart/${encodeURIComponent(sym)}?range=7y&interval=1mo${cq}`;
-      const r=await fetch(url,{credentials:creds,headers:{Accept:'application/json'}});
-      if(!r.ok)continue;
-      const d=await r.json();const res=d.chart?.result?.[0];if(!res)continue;
-      const ts=res.timestamp,cl=res.indicators.quote[0].close,hist={};
-      ts.forEach((t,i)=>{if(cl[i]!=null){const m=new Date(t*1000).toISOString().slice(0,7);hist[m]=cl[i];}});
-      const current=cl.filter(Boolean).pop();
-      if(!current)continue;
-      return{current,history:hist,updated:new Date().toISOString()};
-    }catch{}
-  }
-  return null;
+  if(!API_BASE)return null;
+  try{
+    const r=await fetch(`${API_BASE}/price/${encodeURIComponent(sym)}`);
+    if(!r.ok)return null;
+    return await r.json(); // {current, history, updated}
+  }catch{return null;}
 }
 async function refreshPrices(){
   if(!bToken){toast('Connect Box first','error');return;}
-  const btn=document.getElementById('refresh-btn');btn.textContent='↻ Getting session…';btn.disabled=true;
-  const crumb=await getYFCrumb();
-  if(!crumb)toast('No Yahoo session — open finance.yahoo.com in a tab, then retry for better results','info',5000);
-  btn.textContent='↻ Refreshing…';
-  const syms=[...new Set(txns.filter(t=>t.type==='Buy'||t.type==='Sell').map(t=>toYF(t.scrip)))];
-  let ok=0,fail=0;
-  for(const s of syms){
-    try{const d=await fetchYF(s);if(d){prices[s]=d;ok++;}else fail++;}
-    catch{fail++;}
-  }
-  if(ok>0){
+  if(!API_BASE){toast('Enter your API URL in Settings (⚙) first','error',6000);return;}
+  const btn=document.getElementById('refresh-btn');
+  btn.textContent='↻ Fetching…';btn.disabled=true;
+  document.getElementById('price-age').textContent='Fetching prices…';
+  const syms=[...new Set(txns.filter(t=>t.type==='Buy'||t.type==='Sell').map(t=>toYF(t.scrip)).filter(Boolean))];
+  if(!syms.length){toast('No symbols to fetch — complete ISIN map first','error');btn.textContent='↻ Refresh prices';btn.disabled=false;return;}
+  try{
+    const r=await fetch(`${API_BASE}/prices`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({symbols:syms})
+    });
+    if(!r.ok)throw new Error(`API returned ${r.status}`);
+    const d=await r.json();
+    const fetched=d.prices||{};
+    Object.assign(prices,fetched);
+    const ok=Object.keys(fetched).length;
+    const fail=(d.errors||[]).length;
     await bSave('prices.json',{updated:new Date().toISOString(),prices});
     document.getElementById('price-age').textContent=`Updated just now · ${ok}/${syms.length} scrips`;
-    toast(`Prices refreshed: ${ok}/${syms.length} ✓`,'ok');
-  }else{
-    toast(`0/${syms.length} fetched. Open finance.yahoo.com in a new tab, then retry.`,'error',8000);
+    toast(`Prices refreshed: ${ok}/${syms.length} ✓${fail?` (${fail} failed)`:''}`,ok>0?'ok':'error');
+    renderAll();
+  }catch(e){
+    toast(`Price fetch failed: ${e.message} — is the API running?`,'error',8000);
+    document.getElementById('price-age').textContent='Failed — check API URL in Settings';
   }
   btn.textContent='↻ Refresh prices';btn.disabled=false;
-  if(ok>0)renderAll();
 }
 
 // ── mProfit parser ───────────────────────────────────────────
@@ -1142,31 +1126,43 @@ async function lookupAllISINs(forceAll=false){
     return;
   }
 
-  prog.textContent=`${remaining.length} not in embedded map. Getting Yahoo Finance session…`;
-  const crumb=await getYFCrumb();
-  const cq=crumb?`&crumb=${encodeURIComponent(crumb)}`:'';
-  const creds=crumb?'include':'omit';
-  if(!crumb)prog.textContent=`No Yahoo session found. Visit finance.yahoo.com once, then retry. Trying anyway…`;
-  let done=0;
-  for(const r of remaining){
-    prog.textContent=`[${++done}/${remaining.length}] Yahoo search: ${r.scrip||r.isin}…`;
-    let found=false;
-    for(const base of[YF2,YF1]){
-      try{
-        const url=`${base}/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false${cq}`;
-        const res=await fetch(url,{credentials:creds,headers:{Accept:'application/json'}});
-        if(!res.ok)continue;
-        const d=await res.json();
-        const quotes=(d.quotes||[]).filter(q=>q.quoteType==='EQUITY');
-        const ns=quotes.find(q=>q.symbol?.endsWith('.NS'));
-        const bs=quotes.find(q=>q.symbol?.endsWith('.BO'));
-        const best=ns||bs||quotes[0];
-        if(best?.symbol){r.yahoo=best.symbol;r.nse=ns?ns.symbol.replace('.NS',''):'';r.status='✓';ok++;found=true;break;}
-      }catch{}
+  // Step 2: API bulk lookup for stocks not in embedded map
+  const remaining=toLookup.filter(r=>r.status==='not-nse');
+  if(!remaining.length){
+    prog.style.display='none';btn.disabled=false;
+    toast(`Done: ${ok} found ✓`,'ok',5000);saveISINLocal();return;
+  }
+
+  if(!API_BASE){
+    remaining.forEach(r=>{r.status='need-api';});
+    prog.textContent=`${remaining.length} stocks need API lookup. Enter API URL in Settings (⚙).`;
+    setTimeout(()=>prog.style.display='none',6000);
+    btn.disabled=false;saveISINLocal();renderISIN();
+    toast('Enter your API URL in Settings to look up remaining stocks','error',6000);
+    return;
+  }
+
+  prog.textContent=`${remaining.length} not in embedded map. Querying API…`;
+  try{
+    const r=await fetch(`${API_BASE}/lookup/isins`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({isins:remaining.map(r=>r.isin)})
+    });
+    if(!r.ok)throw new Error(`API ${r.status}`);
+    const d=await r.json();
+    for(const row of remaining){
+      const res=(d.results||{})[row.isin];
+      if(res&&res.yahoo&&!res.error){
+        row.yahoo=res.yahoo;row.nse=res.nse||'';row.status='✓';ok++;
+      }else{
+        row.status='?';fail++;
+      }
     }
-    if(!found){r.status='?';fail++;}
-    saveISINLocal(); renderISIN();
-    await new Promise(res=>setTimeout(res,300));
+  }catch(e){
+    remaining.forEach(r=>{r.status='api-err';});
+    fail+=remaining.length;
+    toast(`API lookup failed: ${e.message}`,'error',6000);
   }
 
   prog.style.display='none'; btn.disabled=false;
@@ -1236,14 +1232,26 @@ function switchTab(i){
 
 // ── Settings ─────────────────────────────────────────────────
 function openSettings(){
+  document.getElementById('s-api').value=localStorage.getItem('inv_api_url')||'';
   document.getElementById('sc').value=localStorage.getItem('i_ci')||'';
   document.getElementById('ss').value=localStorage.getItem('i_cs')||'';
   document.getElementById('sa').value=localStorage.getItem('i_ak')||'';
   document.getElementById('sm').classList.add('open');
 }
 function closeModal(){document.getElementById('sm').classList.remove('open');}
-function saveAuth(){localStorage.setItem('i_ak',document.getElementById('sa').value.trim());startAuth();}
+function saveAuth(){
+  const apiUrl=document.getElementById('s-api').value.trim().replace(/\/$/,'');
+  if(apiUrl){localStorage.setItem('inv_api_url',apiUrl);API_BASE=apiUrl;}
+  localStorage.setItem('i_ak',document.getElementById('sa').value.trim());
+  startAuth();
+}
 function updateBS(ok){const e=document.getElementById('box-status');e.textContent=ok?'Box: connected ✓':'Box: not connected';e.style.color=ok?'var(--green)':'var(--text3)';}
+function saveSettingsOnly(){
+  const apiUrl=document.getElementById('s-api').value.trim().replace(/\/$/,'');
+  if(apiUrl){localStorage.setItem('inv_api_url',apiUrl);API_BASE=apiUrl;}
+  localStorage.setItem('i_ak',document.getElementById('sa').value.trim());
+  closeModal();toast('Settings saved ✓','ok');
+}
 
 // ── Init ─────────────────────────────────────────────────────
 async function init(){
