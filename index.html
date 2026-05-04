@@ -301,9 +301,10 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
     </div>
   </div>
   <div class="tip blue" style="margin-top:8px">
-    <b>Workflow:</b> Upload your ISIN Excel → click <b>🔍 Lookup symbols</b> (fills Yahoo/NSE/BSE for all rows with ISIN) → click <b>💾 Save to Box</b>.<br>
-    <b>💾 Save to Box</b> — syncs the ISIN map to your Box account (<code>Investments/isin_map.json</code>). It loads automatically on every page visit. Without saving, data persists in browser only (cleared if you clear browser data).<br>
-    <b>🔍 Lookup symbols</b> only processes rows where Yahoo symbol is blank. Use <b>↺ Re-lookup all</b> to refresh every row.
+    <b>Workflow:</b> Upload ISIN Excel → <b>🔍 Lookup symbols</b> → <b>💾 Save to Box</b>.<br>
+    <b>Lookup step 1</b> downloads NSE equity master (all 2000+ NSE stocks, one request). Most portfolios are fully matched here.<br>
+    <b>Lookup step 2</b> uses Yahoo Finance via corsproxy for BSE-only stocks — requires free registration: go to <b>corsproxy.io → Get API Key → add <code>investments-ag4n.onrender.com</code></b>.<br>
+    <b>💾 Save to Box</b> saves to <code>Investments/isin_map.json</code> and loads automatically on every visit. Without it, data is browser-only.
   </div>
 </div>
 
@@ -844,100 +845,163 @@ async function importISINFile(file){
     if(file.name.toLowerCase().endsWith('.csv')){rows=parseCSV(await file.text());}
     else{const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array',raw:true});rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:true});}
   }catch(e){toast('File error: '+e.message,'error');return;}
-
-  // Skip blank leading rows
   while(rows.length&&rows[0].every(c=>!c))rows.shift();
 
-  // Find header row — must contain "isin" somewhere
-  let hi=-1,ic=-1,sc=-1,yc=-1,nc=-1,bc=-1;
+  // Find header row — locate ISIN column first
+  let hi=-1,ic=-1,sc=-1;
   for(let i=0;i<Math.min(12,rows.length);i++){
     const r=rows[i].map(x=>String(x||'').toLowerCase().trim());
     const ii=r.findIndex(x=>x==='isin'||x==='isin code'||x==='isin no'||x==='isin number'||x.includes('isin'));
     if(ii>=0){
       hi=i; ic=ii;
-      // Look for scrip/name column — broad set of keywords
-      sc=r.findIndex(x=>x.includes('scrip')||x.includes('stock')||x.includes('security')||x.includes('company')||x.includes('instrument')||x==='name'||x==='asset');
-      if(sc<0||sc===ic){
-        // fallback: use the first non-ISIN column that has text data in next row
+      // Look for scrip/name column — exclude the ISIN column itself
+      sc=r.findIndex((x,idx)=>idx!==ic&&(x.includes('scrip')||x.includes('stock')||x.includes('security')||x.includes('company')||x.includes('instrument')||x==='name'||x==='asset'||x==='symbol'));
+      if(sc<0){
+        // Fallback: pick the non-ISIN column whose first data row cell looks like a company name (letters, length > 3)
         const nextRow=rows[i+1]||[];
-        sc=nextRow.findIndex((c,idx)=>idx!==ic&&String(c||'').trim().length>2);
+        sc=nextRow.findIndex((c,idx)=>idx!==ic&&/^[A-Za-z]/.test(String(c||'').trim())&&String(c||'').trim().length>3);
       }
-      yc=r.findIndex(x=>x.includes('yahoo')||x.includes('ticker')||x==='symbol');
-      nc=r.findIndex(x=>x.includes('nse')&&!x.includes('isin'));
-      bc=r.findIndex(x=>x.includes('bse')&&!x.includes('isin'));
       break;
     }
   }
-  if(hi<0||ic<0){
-    toast('No ISIN column found. File needs a column with header "ISIN" or "ISIN Code".','error',7000);
-    return;
-  }
+  if(hi<0||ic<0){toast('No ISIN column found. File needs a column header containing "ISIN".','error',7000);return;}
+  if(sc<0){toast('Could not detect the scrip name column. Please check file format.','error',6000);return;}
+
   const hdrRow=rows[hi];
-  const msg=`Columns detected → Scrip: "${hdrRow[sc]||'col '+(sc+1)}" | ISIN: "${hdrRow[ic]||'col '+(ic+1)}"`;
-  toast(msg,'info',5000);
+  toast(`Importing: scrip="${hdrRow[sc]||'col '+(sc+1)}" | ISIN="${hdrRow[ic]||'col '+(ic+1)}"… (${rows.length-hi-1} rows)`,'info',5000);
 
   let added=0,updated=0;
   for(let i=hi+1;i<rows.length;i++){
     const row=rows[i];
     const isin=String(row[ic]||'').trim();
-    if(!isin||!/^IN[A-Z0-9]{10}$/.test(isin))continue; // skip rows without valid Indian ISIN
-    const scrip=sc>=0?String(row[sc]||'').trim():'';
+    if(!isin||!/^IN[A-Z0-9]{10}$/.test(isin))continue;
+    const scrip=String(row[sc]||'').trim();
     if(!scrip)continue;
-    const yahoo=yc>=0?String(row[yc]||'').trim():'';
-    const nse  =nc>=0?String(row[nc]||'').trim():'';
-    const bse  =bc>=0?String(row[bc]||'').trim():'';
     const ex=isinMap.find(r=>r.isin===isin||(scrip&&r.scrip.toUpperCase()===scrip.toUpperCase()));
-    if(ex){ex.isin=isin;if(scrip)ex.scrip=scrip;if(yahoo)ex.yahoo=yahoo;if(nse)ex.nse=nse;if(bse)ex.bse=bse;updated++;}
-    else{isinMap.push({scrip,isin,yahoo,nse,bse,status:''});added++;}
+    if(ex){
+      ex.isin=isin;
+      if(scrip)ex.scrip=scrip;
+      // IMPORTANT: clear stale yahoo/nse/bse so lookup runs fresh
+      ex.yahoo=''; ex.nse=''; ex.bse=''; ex.status='';
+      updated++;
+    }else{
+      isinMap.push({scrip,isin,yahoo:'',nse:'',bse:'',status:''});
+      added++;
+    }
   }
   saveISINLocal();
   renderISIN();
-  toast(`ISIN file: ${added} new rows added, ${updated} updated ✓`,'ok');
+  toast(`Done: ${added} added, ${updated} updated. Click "Lookup symbols" to fetch NSE/BSE symbols.`,'ok',6000);
+}
+
+// ── NSE master CSV lookup (bulk, one request) ─────────────────
+let nseMasterCache=null; // {isin: nseSymbol}
+
+async function loadNSEMaster(){
+  if(nseMasterCache)return nseMasterCache;
+  const prog=document.getElementById('lookup-progress');
+  prog.style.display='block';
+  prog.textContent='Downloading NSE equity master list…';
+  const NSE_CSV='https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv';
+  const attempts=[
+    // Try direct (browser, NSE has no CORS headers but some environments allow)
+    ()=>fetch(NSE_CSV,{headers:{'User-Agent':'Mozilla/5.0'}}),
+    // Try via corsproxy (works if domain registered)
+    ()=>fetch('https://corsproxy.io/?'+encodeURIComponent(NSE_CSV)),
+    // Try via allorigins wrapped response
+    ()=>fetch('https://api.allorigins.win/get?url='+encodeURIComponent(NSE_CSV)).then(async r=>{const d=await r.json();return new Response(d.contents);}),
+  ];
+  for(const attempt of attempts){
+    try{
+      const r=await attempt();
+      if(!r.ok)continue;
+      const text=await r.text();
+      if(!text.includes('SYMBOL'))continue;
+      const map={};
+      text.split('\n').slice(1).forEach(line=>{
+        const cols=line.split(',');
+        const sym=(cols[0]||'').trim();
+        const isin=(cols[6]||'').trim();
+        if(sym&&isin&&/^IN/.test(isin))map[isin]=sym;
+      });
+      nseMasterCache=map;
+      prog.textContent=`NSE master loaded: ${Object.keys(map).length} stocks.`;
+      return map;
+    }catch{}
+  }
+  return null;
 }
 
 async function lookupAllISINs(forceAll=false){
-  // Only look up rows that have an ISIN but no Yahoo symbol yet (or force all)
   const toLookup=isinMap.filter(r=>r.isin&&(forceAll||!r.yahoo));
   if(!toLookup.length){
-    toast(forceAll?'Nothing to look up':'All ISINs already have symbols. Use "Re-lookup all" to refresh.','error',5000);
+    toast(forceAll?'Nothing to look up':'All ISINs already have Yahoo symbols. Use "↺ Re-lookup all" to refresh.','error',5000);
     return;
   }
   const btn=document.getElementById('lookup-btn');
   const prog=document.getElementById('lookup-progress');
-  btn.disabled=true;prog.style.display='block';
-  let done=0,ok=0,fail=0;
-  for(const r of toLookup){
-    prog.textContent=`[${++done}/${toLookup.length}] Looking up: ${r.isin} (${r.scrip||'?'})…`;
-    try{
-      const url=`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false&lang=en-US&region=IN`;
-      const res=await fetch(YFP+encodeURIComponent(url));
-      if(!res.ok){r.status='HTTP '+res.status;fail++;continue;}
-      const d=await res.json();
-      const quotes=(d.quotes||[]).filter(q=>q.quoteType==='EQUITY');
-      const ns=quotes.find(q=>q.symbol&&q.symbol.endsWith('.NS'));
-      const bs=quotes.find(q=>q.symbol&&q.symbol.endsWith('.BO'));
-      const best=ns||bs||quotes[0];
-      if(best&&best.symbol){
-        r.yahoo=best.symbol;
-        r.nse=ns?ns.symbol.replace('.NS',''):(r.yahoo.endsWith('.NS')?r.yahoo.replace('.NS',''):'');
-        r.bse=bs?bs.symbol.replace('.BO',''):'';
-        r.status='✓';ok++;
-      }else{
-        r.yahoo='';r.status='?';fail++;
-        prog.textContent=`[${done}/${toLookup.length}] No result for ${r.isin} — check ISIN is correct`;
-      }
-    }catch(e){
-      r.status='err';r.yahoo='';fail++;
-      prog.textContent=`[${done}/${toLookup.length}] Error: ${e.message}`;
+  btn.disabled=true; prog.style.display='block';
+  let ok=0,fail=0;
+
+  // Step 1: Try NSE master CSV (one bulk download)
+  const nseMap=await loadNSEMaster();
+  if(nseMap){
+    prog.textContent=`Matching ${toLookup.length} ISINs against NSE master…`;
+    for(const r of toLookup){
+      const sym=nseMap[r.isin];
+      if(sym){r.yahoo=sym+'.NS';r.nse=sym;r.status='✓';ok++;}
+      else{r.status='not-nse';}
     }
-    saveISINLocal();
-    renderISIN();
-    await new Promise(res=>setTimeout(res,400)); // 400ms between requests
+    saveISINLocal(); renderISIN();
+    prog.textContent=`NSE: ${ok} found. Trying Yahoo for the remaining ${toLookup.filter(r=>r.status==='not-nse').length}…`;
+  }else{
+    prog.textContent='NSE master unavailable — trying Yahoo Finance per ISIN…';
   }
-  prog.style.display='none';btn.disabled=false;
-  saveISINLocal();
-  renderISIN();
-  toast(`Lookup done: ${ok} found, ${fail} not found ✓`,'ok');
+
+  // Step 2: For stocks not found in NSE master, try Yahoo Finance search via corsproxy
+  const remaining=toLookup.filter(r=>!r.yahoo);
+  if(remaining.length){
+    // Quick connectivity test first
+    let proxyWorks=false;
+    try{
+      const testR=await fetch('https://corsproxy.io/?'+encodeURIComponent('https://query2.finance.yahoo.com/v1/finance/search?q=RELIANCE&quotesCount=1&newsCount=0'));
+      if(testR.ok){const td=await testR.json();proxyWorks=(td.quotes||[]).length>0;}
+    }catch{}
+
+    if(proxyWorks){
+      let done=0;
+      for(const r of remaining){
+        prog.textContent=`[${++done}/${remaining.length}] Yahoo lookup: ${r.isin}…`;
+        try{
+          const url=`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`;
+          const res=await fetch('https://corsproxy.io/?'+encodeURIComponent(url));
+          if(!res.ok){r.status='proxy-err';fail++;continue;}
+          const d=await res.json();
+          const quotes=(d.quotes||[]).filter(q=>q.quoteType==='EQUITY');
+          const ns=quotes.find(q=>q.symbol?.endsWith('.NS'));
+          const bs=quotes.find(q=>q.symbol?.endsWith('.BO'));
+          const best=ns||bs||quotes[0];
+          if(best?.symbol){r.yahoo=best.symbol;r.nse=ns?ns.symbol.replace('.NS',''):'';r.bse=bs?bs.symbol.replace('.BO',''):'';r.status='✓';ok++;}
+          else{r.status='?';fail++;}
+        }catch{r.status='err';fail++;}
+        saveISINLocal(); renderISIN();
+        await new Promise(res=>setTimeout(res,350));
+      }
+    }else{
+      // Proxy not working — guide user
+      remaining.forEach(r=>{r.status='no-proxy';fail++;});
+      const proxyMsg=`${remaining.length} stocks not on NSE master. Register your domain at corsproxy.io to enable Yahoo lookup for BSE/unlisted stocks.`;
+      prog.textContent=proxyMsg;
+      prog.style.color='var(--amber)';
+      toast(proxyMsg,'error',10000);
+    }
+  }
+
+  prog.style.display='none'; prog.style.color='';
+  btn.disabled=false;
+  saveISINLocal(); renderISIN();
+  const summary=`Lookup complete: ${ok} found, ${fail} not found.`+(fail>0?' Check status column.':'');
+  toast(summary,fail>0?'info':'ok',6000);
 }
 
 // localStorage persistence for isinMap (survives page refresh without Box)
@@ -947,35 +1011,37 @@ function loadISINLocal(){try{const d=JSON.parse(localStorage.getItem('inv_isin')
 function renderISIN(){
   const q=document.getElementById('is')?.value.toLowerCase()||'';
   const list=isinMap.filter(r=>!q||r.scrip.toLowerCase().includes(q)||(r.isin||'').toLowerCase().includes(q));
-  document.getElementById('isc').textContent=list.length+' / '+isinMap.length+' scrips · '+isinMap.filter(r=>r.yahoo).length+' with symbol';
+  const withSym=isinMap.filter(r=>r.yahoo).length;
   const missing=isinMap.filter(r=>r.isin&&!r.yahoo).length;
-  if(missing>0)document.getElementById('lookup-btn').textContent=`🔍 Lookup ${missing} missing`;
-  else document.getElementById('lookup-btn').textContent='🔍 Lookup symbols';
+  document.getElementById('isc').textContent=`${list.length} / ${isinMap.length} scrips · ${withSym} with symbol`;
+  const lbtn=document.getElementById('lookup-btn');
+  if(lbtn)lbtn.textContent=missing>0?`🔍 Lookup ${missing} missing`:'🔍 Lookup symbols';
   document.getElementById('ib').innerHTML=list.map((r)=>{
     const ri=isinMap.indexOf(r);
-    const sc=r.status==='✓'?'var(--green)':r.status==='?'||r.status==='err'||r.status.startsWith('HTTP')?'var(--red)':'var(--text3)';
+    const sc=r.status==='✓'?'var(--green)':r.status&&r.status!=='not-nse'&&r.status!==''?'var(--red)':'var(--text3)';
+    const stLabel={'✓':'✓','?':'not found','no-proxy':'need proxy','not-nse':'NSE miss','err':'error','proxy-err':'proxy err','':'-'}[r.status]||(r.status||'-');
     return`<tr>
       <td><input class="ic" value="${escH(r.scrip||'')}" oninput="isinMap[${ri}].scrip=this.value;saveISINLocal()" placeholder="mProfit scrip name"></td>
       <td><input class="ic" value="${escH(r.isin||'')}" oninput="isinMap[${ri}].isin=this.value;saveISINLocal()" placeholder="INE000A01011"></td>
       <td><input class="ic" value="${escH(r.yahoo||'')}" oninput="isinMap[${ri}].yahoo=this.value;saveISINLocal()" placeholder="HDFCBANK.NS" ${r.yahoo?'style="color:var(--green)"':''}></td>
       <td><input class="ic" value="${escH(r.nse||'')}" oninput="isinMap[${ri}].nse=this.value;saveISINLocal()" placeholder="HDFCBANK"></td>
       <td><input class="ic" value="${escH(r.bse||'')}" oninput="isinMap[${ri}].bse=this.value;saveISINLocal()" placeholder="500180"></td>
-      <td style="text-align:center;color:${sc};font-size:11px;cursor:pointer" onclick="isinMap.splice(${ri},1);saveISINLocal();renderISIN()" title="Delete row">✕</td>
+      <td style="text-align:center;color:${sc};font-size:11px;cursor:pointer" title="${r.status||''} — click to delete" onclick="isinMap.splice(${ri},1);saveISINLocal();renderISIN()">${stLabel}</td>
     </tr>`;
   }).join('');
 }
 function escH(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 
 async function saveISIN(){
-  if(!bToken){toast('Box not connected — ISIN map is saved in browser localStorage. Connect Box (⚙) to sync to cloud.','error',6000);return;}
+  if(!bToken){toast('Box not connected — data is in browser localStorage. Connect Box (⚙) to sync to cloud permanently.','error',6000);return;}
   await bSave('isin_map.json',isinMap);
   saveISINLocal();
-  toast('ISIN map saved to Box ✓ — will load automatically on next visit','ok');
+  toast('ISIN map saved to Box ✓ — loads automatically on every visit','ok');
 }
 
 function dlISINMap(){
   const csv='Scrip Name,ISIN,Yahoo Symbol,NSE Symbol,BSE Code,Status\n'+
-    isinMap.map(r=>[`"${r.scrip||''}"`,r.isin||'',r.yahoo||'',r.nse||'',r.bse||'',r.status||''].join(',')).join('\n');
+    isinMap.map(r=>[`"${escH(r.scrip||'')}"`,r.isin||'',r.yahoo||'',r.nse||'',r.bse||'',r.status||''].join(',')).join('\n');
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
   a.download='isin_map.csv';a.click();
