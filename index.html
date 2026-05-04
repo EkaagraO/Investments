@@ -273,12 +273,14 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
 <!-- TAB 4: ISIN map -->
 <div class="panel" id="tab4">
   <div class="isin-toolbar">
-    <input type="text" id="is" placeholder="Search scrip…" oninput="renderISIN()">
+    <input type="text" id="is" placeholder="Search scrip or ISIN…" oninput="renderISIN()">
     <span style="font-size:12px;color:var(--text3)" id="isc"></span>
     <button class="btn sm" onclick="document.getElementById('isin-file').click()">⬆ Upload Excel/CSV</button>
     <input type="file" id="isin-file" style="display:none" accept=".csv,.xlsx,.xls" onchange="importISINFile(this.files[0]);this.value=''">
-    <button class="btn sm" id="lookup-btn" onclick="lookupAllISINs()">🔍 Lookup symbols</button>
-    <button class="btn sm primary" onclick="saveISIN()">💾 Save to Box</button>
+    <button class="btn sm" id="lookup-btn" onclick="lookupAllISINs(false)">🔍 Lookup symbols</button>
+    <button class="btn sm" onclick="lookupAllISINs(true)" title="Re-fetch symbols for ALL rows, even those already filled">↺ Re-lookup all</button>
+    <button class="btn sm" onclick="dlISINMap()">⬇ Download CSV</button>
+    <button class="btn sm primary" onclick="saveISIN()" title="Saves ISIN map to your Box account so it loads automatically on every visit">💾 Save to Box</button>
     <button class="btn sm" onclick="addISINRow()">+ Add row</button>
     <button class="btn sm" onclick="autoFill()">Auto-fill from transactions</button>
   </div>
@@ -299,9 +301,9 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
     </div>
   </div>
   <div class="tip blue" style="margin-top:8px">
-    <b>Upload your ISIN mapping Excel</b> — needs columns "Scrip Name" (or mProfit name) and "ISIN".<br>
-    Then click <b>Lookup symbols</b> to auto-fill Yahoo/NSE/BSE from Yahoo Finance search API.<br>
-    Lookup priority: Yahoo symbol → NSE symbol+".NS" → BSE code+".BO" → built-in map.
+    <b>Workflow:</b> Upload your ISIN Excel → click <b>🔍 Lookup symbols</b> (fills Yahoo/NSE/BSE for all rows with ISIN) → click <b>💾 Save to Box</b>.<br>
+    <b>💾 Save to Box</b> — syncs the ISIN map to your Box account (<code>Investments/isin_map.json</code>). It loads automatically on every page visit. Without saving, data persists in browser only (cleared if you clear browser data).<br>
+    <b>🔍 Lookup symbols</b> only processes rows where Yahoo symbol is blank. Use <b>↺ Re-lookup all</b> to refresh every row.
   </div>
 </div>
 
@@ -830,9 +832,9 @@ function updateUC(){document.getElementById('uc').textContent=batches.length||'0
 function autoFill(){
   const ex=new Set(isinMap.map(r=>r.scrip.toUpperCase()));
   const nr=[...new Set(txns.map(t=>t.scrip))].filter(s=>!ex.has(s.toUpperCase())).map(s=>({scrip:s,isin:'',yahoo:'',nse:'',bse:'',status:''}));
-  isinMap=[...isinMap,...nr];renderISIN();toast(`Added ${nr.length} scrips to ISIN map`,'ok');
+  isinMap=[...isinMap,...nr];saveISINLocal();renderISIN();toast(`Added ${nr.length} scrips to ISIN map`,'ok');
 }
-function addISINRow(){isinMap.push({scrip:'',isin:'',yahoo:'',nse:'',bse:'',status:''});renderISIN();}
+function addISINRow(){isinMap.push({scrip:'',isin:'',yahoo:'',nse:'',bse:'',status:''});saveISINLocal();renderISIN();}
 
 async function importISINFile(file){
   if(!file)return;
@@ -842,86 +844,141 @@ async function importISINFile(file){
     if(file.name.toLowerCase().endsWith('.csv')){rows=parseCSV(await file.text());}
     else{const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array',raw:true});rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:true});}
   }catch(e){toast('File error: '+e.message,'error');return;}
-  // Find header row and columns
-  let hi=-1,sc=-1,ic=-1,yc=-1,nc=-1,bc=-1;
-  for(let i=0;i<Math.min(10,rows.length);i++){
-    const r=rows[i].map(x=>String(x||'').toLowerCase());
-    const si=r.findIndex(x=>x.includes('scrip')||x.includes('stock')||x.includes('name')||x.includes('company')||x.includes('security'));
-    const ii=r.findIndex(x=>x.includes('isin'));
-    if(ii>=0){hi=i;sc=si>=0?si:0;ic=ii;
-      yc=r.findIndex(x=>x.includes('yahoo')||x.includes('ticker'));
-      nc=r.findIndex(x=>x.includes('nse')||x.includes('symbol'));
-      bc=r.findIndex(x=>x.includes('bse')||x.includes('code'));
+
+  // Skip blank leading rows
+  while(rows.length&&rows[0].every(c=>!c))rows.shift();
+
+  // Find header row — must contain "isin" somewhere
+  let hi=-1,ic=-1,sc=-1,yc=-1,nc=-1,bc=-1;
+  for(let i=0;i<Math.min(12,rows.length);i++){
+    const r=rows[i].map(x=>String(x||'').toLowerCase().trim());
+    const ii=r.findIndex(x=>x==='isin'||x==='isin code'||x==='isin no'||x==='isin number'||x.includes('isin'));
+    if(ii>=0){
+      hi=i; ic=ii;
+      // Look for scrip/name column — broad set of keywords
+      sc=r.findIndex(x=>x.includes('scrip')||x.includes('stock')||x.includes('security')||x.includes('company')||x.includes('instrument')||x==='name'||x==='asset');
+      if(sc<0||sc===ic){
+        // fallback: use the first non-ISIN column that has text data in next row
+        const nextRow=rows[i+1]||[];
+        sc=nextRow.findIndex((c,idx)=>idx!==ic&&String(c||'').trim().length>2);
+      }
+      yc=r.findIndex(x=>x.includes('yahoo')||x.includes('ticker')||x==='symbol');
+      nc=r.findIndex(x=>x.includes('nse')&&!x.includes('isin'));
+      bc=r.findIndex(x=>x.includes('bse')&&!x.includes('isin'));
       break;
     }
   }
-  if(hi<0||ic<0){toast('Could not find ISIN column in file. Need a column named "ISIN".','error',6000);return;}
+  if(hi<0||ic<0){
+    toast('No ISIN column found. File needs a column with header "ISIN" or "ISIN Code".','error',7000);
+    return;
+  }
+  const hdrRow=rows[hi];
+  const msg=`Columns detected → Scrip: "${hdrRow[sc]||'col '+(sc+1)}" | ISIN: "${hdrRow[ic]||'col '+(ic+1)}"`;
+  toast(msg,'info',5000);
+
   let added=0,updated=0;
   for(let i=hi+1;i<rows.length;i++){
     const row=rows[i];
-    const scrip=String(row[sc]||'').trim();const isin=String(row[ic]||'').trim();
-    if(!scrip&&!isin)continue;
+    const isin=String(row[ic]||'').trim();
+    if(!isin||!/^IN[A-Z0-9]{10}$/.test(isin))continue; // skip rows without valid Indian ISIN
+    const scrip=sc>=0?String(row[sc]||'').trim():'';
+    if(!scrip)continue;
     const yahoo=yc>=0?String(row[yc]||'').trim():'';
-    const nse=nc>=0?String(row[nc]||'').trim():'';
-    const bse=bc>=0?String(row[bc]||'').trim():'';
-    const ex=scrip?isinMap.find(r=>r.scrip.toUpperCase()===scrip.toUpperCase()):null;
-    if(ex){if(isin)ex.isin=isin;if(yahoo)ex.yahoo=yahoo;if(nse)ex.nse=nse;if(bse)ex.bse=bse;updated++;}
+    const nse  =nc>=0?String(row[nc]||'').trim():'';
+    const bse  =bc>=0?String(row[bc]||'').trim():'';
+    const ex=isinMap.find(r=>r.isin===isin||(scrip&&r.scrip.toUpperCase()===scrip.toUpperCase()));
+    if(ex){ex.isin=isin;if(scrip)ex.scrip=scrip;if(yahoo)ex.yahoo=yahoo;if(nse)ex.nse=nse;if(bse)ex.bse=bse;updated++;}
     else{isinMap.push({scrip,isin,yahoo,nse,bse,status:''});added++;}
   }
+  saveISINLocal();
   renderISIN();
-  toast(`ISIN file: ${added} added, ${updated} updated ✓`,'ok');
+  toast(`ISIN file: ${added} new rows added, ${updated} updated ✓`,'ok');
 }
 
-async function lookupAllISINs(){
-  const toLookup=isinMap.filter(r=>r.isin&&(!r.yahoo||r.status==='retry'));
-  if(!toLookup.length){toast('No ISINs to look up (fill the ISIN column first)','error');return;}
+async function lookupAllISINs(forceAll=false){
+  // Only look up rows that have an ISIN but no Yahoo symbol yet (or force all)
+  const toLookup=isinMap.filter(r=>r.isin&&(forceAll||!r.yahoo));
+  if(!toLookup.length){
+    toast(forceAll?'Nothing to look up':'All ISINs already have symbols. Use "Re-lookup all" to refresh.','error',5000);
+    return;
+  }
   const btn=document.getElementById('lookup-btn');
   const prog=document.getElementById('lookup-progress');
   btn.disabled=true;prog.style.display='block';
-  let done=0,ok=0;
+  let done=0,ok=0,fail=0;
   for(const r of toLookup){
-    prog.textContent=`Looking up ${r.scrip||r.isin} (${++done}/${toLookup.length})…`;
+    prog.textContent=`[${++done}/${toLookup.length}] Looking up: ${r.isin} (${r.scrip||'?'})…`;
     try{
-      const res=await fetch(YFP+encodeURIComponent(`https://query2.finance.yahoo.com/v1/finance/search?q=${r.isin}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`));
+      const url=`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(r.isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false&lang=en-US&region=IN`;
+      const res=await fetch(YFP+encodeURIComponent(url));
+      if(!res.ok){r.status='HTTP '+res.status;fail++;continue;}
       const d=await res.json();
       const quotes=(d.quotes||[]).filter(q=>q.quoteType==='EQUITY');
       const ns=quotes.find(q=>q.symbol&&q.symbol.endsWith('.NS'));
       const bs=quotes.find(q=>q.symbol&&q.symbol.endsWith('.BO'));
       const best=ns||bs||quotes[0];
-      if(best){
-        r.yahoo=best.symbol||'';
-        r.nse=ns?ns.symbol.replace('.NS',''):'';
+      if(best&&best.symbol){
+        r.yahoo=best.symbol;
+        r.nse=ns?ns.symbol.replace('.NS',''):(r.yahoo.endsWith('.NS')?r.yahoo.replace('.NS',''):'');
         r.bse=bs?bs.symbol.replace('.BO',''):'';
         r.status='✓';ok++;
-      }else{r.status='?';}
-    }catch{r.status='err';}
+      }else{
+        r.yahoo='';r.status='?';fail++;
+        prog.textContent=`[${done}/${toLookup.length}] No result for ${r.isin} — check ISIN is correct`;
+      }
+    }catch(e){
+      r.status='err';r.yahoo='';fail++;
+      prog.textContent=`[${done}/${toLookup.length}] Error: ${e.message}`;
+    }
+    saveISINLocal();
     renderISIN();
-    await new Promise(res=>setTimeout(res,300));
+    await new Promise(res=>setTimeout(res,400)); // 400ms between requests
   }
   prog.style.display='none';btn.disabled=false;
-  renderISIN();toast(`Symbol lookup: ${ok}/${toLookup.length} found ✓`,'ok');
+  saveISINLocal();
+  renderISIN();
+  toast(`Lookup done: ${ok} found, ${fail} not found ✓`,'ok');
 }
+
+// localStorage persistence for isinMap (survives page refresh without Box)
+function saveISINLocal(){try{localStorage.setItem('inv_isin',JSON.stringify(isinMap));}catch{}}
+function loadISINLocal(){try{const d=JSON.parse(localStorage.getItem('inv_isin')||'[]');if(d.length){isinMap=d;return true;}}catch{}return false;}
 
 function renderISIN(){
   const q=document.getElementById('is')?.value.toLowerCase()||'';
   const list=isinMap.filter(r=>!q||r.scrip.toLowerCase().includes(q)||(r.isin||'').toLowerCase().includes(q));
-  document.getElementById('isc').textContent=list.length+' / '+isinMap.length+' scrips';
+  document.getElementById('isc').textContent=list.length+' / '+isinMap.length+' scrips · '+isinMap.filter(r=>r.yahoo).length+' with symbol';
+  const missing=isinMap.filter(r=>r.isin&&!r.yahoo).length;
+  if(missing>0)document.getElementById('lookup-btn').textContent=`🔍 Lookup ${missing} missing`;
+  else document.getElementById('lookup-btn').textContent='🔍 Lookup symbols';
   document.getElementById('ib').innerHTML=list.map((r)=>{
     const ri=isinMap.indexOf(r);
-    const sc=r.status==='✓'?'var(--green)':r.status==='?'||r.status==='err'?'var(--red)':'var(--text3)';
+    const sc=r.status==='✓'?'var(--green)':r.status==='?'||r.status==='err'||r.status.startsWith('HTTP')?'var(--red)':'var(--text3)';
     return`<tr>
-      <td><input class="ic" value="${r.scrip||''}" oninput="isinMap[${ri}].scrip=this.value" placeholder="mProfit scrip name"></td>
-      <td><input class="ic" value="${r.isin||''}" oninput="isinMap[${ri}].isin=this.value" placeholder="INE000A01011"></td>
-      <td><input class="ic" value="${r.yahoo||''}" oninput="isinMap[${ri}].yahoo=this.value" placeholder="HDFCBANK.NS"></td>
-      <td><input class="ic" value="${r.nse||''}" oninput="isinMap[${ri}].nse=this.value" placeholder="HDFCBANK"></td>
-      <td><input class="ic" value="${r.bse||''}" oninput="isinMap[${ri}].bse=this.value" placeholder="500180"></td>
-      <td style="text-align:center;color:${sc};font-size:11px">${r.status||'—'}</td>
+      <td><input class="ic" value="${escH(r.scrip||'')}" oninput="isinMap[${ri}].scrip=this.value;saveISINLocal()" placeholder="mProfit scrip name"></td>
+      <td><input class="ic" value="${escH(r.isin||'')}" oninput="isinMap[${ri}].isin=this.value;saveISINLocal()" placeholder="INE000A01011"></td>
+      <td><input class="ic" value="${escH(r.yahoo||'')}" oninput="isinMap[${ri}].yahoo=this.value;saveISINLocal()" placeholder="HDFCBANK.NS" ${r.yahoo?'style="color:var(--green)"':''}></td>
+      <td><input class="ic" value="${escH(r.nse||'')}" oninput="isinMap[${ri}].nse=this.value;saveISINLocal()" placeholder="HDFCBANK"></td>
+      <td><input class="ic" value="${escH(r.bse||'')}" oninput="isinMap[${ri}].bse=this.value;saveISINLocal()" placeholder="500180"></td>
+      <td style="text-align:center;color:${sc};font-size:11px;cursor:pointer" onclick="isinMap.splice(${ri},1);saveISINLocal();renderISIN()" title="Delete row">✕</td>
     </tr>`;
   }).join('');
 }
+function escH(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+
 async function saveISIN(){
-  if(!bToken){toast('Connect Box first','error');return;}
-  await bSave('isin_map.json',isinMap);toast('ISIN map saved ✓','ok');
+  if(!bToken){toast('Box not connected — ISIN map is saved in browser localStorage. Connect Box (⚙) to sync to cloud.','error',6000);return;}
+  await bSave('isin_map.json',isinMap);
+  saveISINLocal();
+  toast('ISIN map saved to Box ✓ — will load automatically on next visit','ok');
+}
+
+function dlISINMap(){
+  const csv='Scrip Name,ISIN,Yahoo Symbol,NSE Symbol,BSE Code,Status\n'+
+    isinMap.map(r=>[`"${r.scrip||''}"`,r.isin||'',r.yahoo||'',r.nse||'',r.bse||'',r.status||''].join(',')).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download='isin_map.csv';a.click();
 }
 
 // ── Members ──────────────────────────────────────────────────
@@ -954,6 +1011,9 @@ function updateBS(ok){const e=document.getElementById('box-status');e.textConten
 
 // ── Init ─────────────────────────────────────────────────────
 async function init(){
+  // Load ISIN map from localStorage immediately (before Box loads, so data is never blank)
+  loadISINLocal();
+
   if(location.search.includes('code=')){const ok=await handleCB();if(!ok)return;}
   else await loadTok();
   if(bToken){
@@ -969,11 +1029,15 @@ async function init(){
       }
       const pc=await bLoad('prices.json');
       if(pc?.prices){prices=pc.prices;if(pc.updated){const h=Math.round((Date.now()-new Date(pc.updated))/3600000);document.getElementById('price-age').textContent=`Prices: ${h<24?h+'h ago':Math.round(h/24)+'d ago'}`;}}
-      const im=await bLoad('isin_map.json');if(im?.length)isinMap=im;
+      // Box isin_map overrides localStorage if it exists
+      const im=await bLoad('isin_map.json');
+      if(im?.length){isinMap=im;saveISINLocal();}
       renderMPills();renderUH();updateUC();renderAll();
     }catch(e){toast('Error: '+e.message,'error',8000);}
   }else{
     if(!localStorage.getItem('i_ci')){openSettings();toast('Connect Box to get started','info',6000);}
+    // Even without Box, render what we have from localStorage
+    renderMPills();renderUH();updateUC();renderAll();
   }
 }
 init();
