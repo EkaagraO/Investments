@@ -208,10 +208,10 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
           <tr>
             <th style="padding:4px 8px;text-align:left;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Month</th>
             <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Opening</th>
-            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Invested</th>
-            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Redeemed</th>
+            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Net flow</th>
             <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Dividend</th>
             <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Mkt move</th>
+            <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Cl. price</th>
             <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">Closing</th>
             <th style="padding:4px 8px;text-align:right;border-bottom:0.5px solid var(--border);background:var(--bg);position:sticky;top:0;font-size:10px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.03em">IRR %</th>
           </tr>
@@ -290,6 +290,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--bg2)}
 
   <div class="actions-bar" id="abar" style="display:none">
     <span style="font-size:12px;color:var(--text2)" id="asummary"></span>
+    <button class="btn sm" onclick="cleanDuplicates()">🔁 Remove duplicates</button>
     <button class="btn sm" onclick="dlAll()">⬇ Download all CSV</button>
   </div>
   <div id="uph"></div>
@@ -662,7 +663,7 @@ async function importTxns(){
   const bid='b'+Date.now();
   const batch={id:bid,name:pf.filename,member,date:new Date().toISOString(),count:newT.length,txns:newT};
   batches.push(batch);
-  txns=batches.flatMap(b=>b.txns).sort((a,b)=>a.date>b.date?1:-1);
+  txns=dedupTxns(batches.flatMap(b=>b.txns).sort((a,b)=>a.date>b.date?1:-1));
   if(bToken){
     toast('Saving to Box…','info',0);
     await bSave(`batch_${bid}.json`,batch);
@@ -677,21 +678,23 @@ async function importTxns(){
 function fTxns(){return active==='all'?txns:txns.filter(t=>t.member===active);}
 function computeH(tl){
   const h={};let td=0;
-  // Process transactions in date order so splits/bonuses apply correctly
   const sorted=[...tl].sort((a,b)=>a.date>b.date?1:-1);
   for(const t of sorted){
     if(!h[t.scrip])h[t.scrip]={scrip:t.scrip,qty:0,cost:0,bq:0,div:0,mems:new Set()};
     const r=h[t.scrip];r.mems.add(t.member);
     if(t.type==='Buy'){r.qty+=t.qty;r.cost+=Math.abs(t.amount);r.bq+=t.qty;}
     else if(t.type==='Sell'){
-      // Reduce avg cost proportionally on sell
       const sellRatio=r.qty>0?Math.min(t.qty/r.qty,1):0;
       r.cost-=r.cost*sellRatio;
       r.qty-=t.qty;
     }
     else if(t.type==='Bonus')r.qty+=t.qty;
-    // Split: mProfit records qty as shares RECEIVED (additional), not ratio
-    else if(t.type==='Split')r.qty+=t.qty;
+    else if(t.type==='Split'){
+      // mProfit Split: t.qty = NEW total qty after split, t.amount = new cost basis
+      // Replace qty entirely; cost continues from t.amount if provided, else unchanged
+      r.qty=t.qty;
+      if(t.amount&&Math.abs(t.amount)>0)r.cost=Math.abs(t.amount);
+    }
     else if(t.type==='Dividend'){r.div+=Math.abs(t.amount);td+=Math.abs(t.amount);}
     else if(t.type==='Rights'){r.qty+=t.qty;r.cost+=Math.abs(t.amount||0);}
   }
@@ -719,63 +722,84 @@ function xirr(cashflows){
 }
 
 function computeM(tl){
-  if(!tl.length)return{months:[],xirr_pct:null};
+  if(!tl.length)return{months:[],irrLine:[]};
   const sorted=[...tl].sort((a,b)=>a.date>b.date?1:-1);
   let d=new Date(sorted[0].date.slice(0,7)+'-01');
-  const months=[];
-  while(d<=new Date()){months.push(d.toISOString().slice(0,7));d=new Date(d.getFullYear(),d.getMonth()+1,1);}
+  const allMonths=[];
+  while(d<=new Date()){allMonths.push(d.toISOString().slice(0,7));d=new Date(d.getFullYear(),d.getMonth()+1,1);}
 
-  // Build running state month by month
-  const hq={};    // scrip→qty
+  const hq={};  // scrip → qty (running)
+  const hc={};  // scrip → cost basis (running)
   let cumBuy=0,cumSell=0;
   const rows=[];
+  const xflows=[];  // for XIRR: {date, amount}
 
-  // For XIRR: all cashflows (buys negative, sells+dividends+current positive)
-  const xflows=[];
-
-  months.forEach(mon=>{
-    const monTxns=tl.filter(t=>t.date&&t.date.slice(0,7)===mon);
+  allMonths.forEach(mon=>{
+    const monTxns=sorted.filter(t=>t.date&&t.date.slice(0,7)===mon);
     let buy=0,sell=0,div=0;
     for(const t of monTxns){
-      if(t.type==='Buy'){const a=Math.abs(t.amount);buy+=a;cumBuy+=a;hq[t.scrip]=(hq[t.scrip]||0)+t.qty;xflows.push({date:new Date(t.date),amount:-a});}
-      else if(t.type==='Sell'){const a=Math.abs(t.amount);sell+=a;cumSell+=a;hq[t.scrip]=(hq[t.scrip]||0)-t.qty;xflows.push({date:new Date(t.date),amount:a});}
-      else if(t.type==='Bonus')hq[t.scrip]=(hq[t.scrip]||0)+t.qty;
-      else if(t.type==='Split')hq[t.scrip]=(hq[t.scrip]||0)+t.qty;
-      else if(t.type==='Dividend'){div+=Math.abs(t.amount);xflows.push({date:new Date(t.date),amount:Math.abs(t.amount)});}
+      if(t.type==='Buy'){
+        const a=Math.abs(t.amount);buy+=a;cumBuy+=a;
+        hq[t.scrip]=(hq[t.scrip]||0)+t.qty;
+        hc[t.scrip]=(hc[t.scrip]||0)+a;
+        xflows.push({date:new Date(t.date),amount:-a});
+      } else if(t.type==='Sell'){
+        const a=Math.abs(t.amount);sell+=a;cumSell+=a;
+        hq[t.scrip]=(hq[t.scrip]||0)-t.qty;
+        xflows.push({date:new Date(t.date),amount:a});
+      } else if(t.type==='Bonus'){
+        hq[t.scrip]=(hq[t.scrip]||0)+t.qty;
+      } else if(t.type==='Split'){
+        // mProfit Split: t.qty = new total qty, cost continues
+        hq[t.scrip]=t.qty;
+        if(t.amount&&Math.abs(t.amount)>0)hc[t.scrip]=Math.abs(t.amount);
+      } else if(t.type==='Dividend'){
+        div+=Math.abs(t.amount);
+        xflows.push({date:new Date(t.date),amount:Math.abs(t.amount)});
+      }
     }
-    // Portfolio value at end of month
-    let pv=0;
+    // Portfolio value at end of month using ISIN-mapped symbols
+    let pv=0,pvKnown=false;
     for(const[sc,qty]of Object.entries(hq)){
       if(qty<=0)continue;
       const p=prices[toYF(sc)];
       const cmp=p?.history?.[mon]??p?.current;
-      if(cmp)pv+=qty*cmp;
+      if(cmp!=null){pv+=qty*cmp;pvKnown=true;}
     }
-    const netInv=cumBuy-cumSell;
     const prevRow=rows[rows.length-1];
-    const openVal=prevRow?prevRow.closeVal:0;
-    const mktMove=pv?(pv-openVal-buy+sell-div):0;
+    const openVal=prevRow?.closeVal??0;
+    // Net cashflow: positive = net investment, negative = net redemption
+    const netFlow=buy-sell;
+    // Market move = closing - opening - netflow - dividends received
+    const mktMove=(pvKnown&&openVal!=null)?Math.round(pv-openVal-netFlow):null;
+
     rows.push({
-      mon, label:new Date(mon+'-15').toLocaleDateString('en-IN',{month:'short',year:'2-digit'}),
+      mon,
+      label:new Date(mon+'-15').toLocaleDateString('en-IN',{month:'short',year:'2-digit'}),
       buy,sell,div,
-      netInv:Math.round(netInv),
-      openVal:Math.round(openVal),
-      closeVal:pv?Math.round(pv):null,
-      mktMove:pv?Math.round(mktMove):null,
+      netFlow:Math.round(netFlow),  // + = invested, - = redeemed
+      openVal:Math.round(openVal||0),
+      closeVal:pvKnown?Math.round(pv):null,
+      mktMove,
     });
   });
 
-  // Compute rolling XIRR per month for the IRR line
-  // Add terminal cashflow (current portfolio value) for IRR at each point
-  const irrLine=rows.map((row,i)=>{
-    if(!row.closeVal||xflows.length<2)return null;
+  // Rolling XIRR: for each month, add terminal cashflow = closeVal, compute XIRR
+  const irrLine=rows.map(row=>{
+    if(!row.closeVal||xflows.filter(f=>f.date<=new Date(row.mon+'-28')).length<1)return null;
+    // All cashflows up to this month end, plus closing portfolio value as terminal inflow
     const flows=[...xflows.filter(f=>f.date<=new Date(row.mon+'-28'))];
     if(!flows.length)return null;
+    // Terminal: current portfolio value is the "liquidation" inflow
     flows.push({date:new Date(row.mon+'-28'),amount:row.closeVal});
+    // Net flows must have both negative and positive entries for XIRR to converge
+    const hasOut=flows.some(f=>f.amount<0);
+    const hasIn=flows.some(f=>f.amount>0);
+    if(!hasOut||!hasIn)return null;
     return xirr(flows);
   });
 
-  return{months:rows,irrLine};
+  return{months:rows.filter(r=>r.openVal||r.buy||r.sell||r.div||r.closeVal),irrLine};
 }
 
 // ── Sort ─────────────────────────────────────────────────────
@@ -848,15 +872,16 @@ function renderT(){
   if(c>=0){const gv=t=>[t.date,t.scrip,t.member||'',t.type,t.qty,t.price,Math.abs(t.amount)][c];list.sort((a,b)=>typeof gv(a)==='string'?gv(a).localeCompare(gv(b))*d:(gv(a)-gv(b))*d);}
   else list=[...list].sort((a,b)=>a.date>b.date?-1:1);
   const tb=document.getElementById('tb');
-  if(!list.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text3)">No transactions match</td></tr>';return;}
+  if(!list.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text3)">No transactions match</td></tr>';return;}
+  const p='padding:3px 7px;border-bottom:0.5px solid var(--border)';
   tb.innerHTML=list.map(t=>`<tr>
-    <td style="white-space:nowrap">${fd(t.date)}</td>
-    <td><b>${t.scrip}</b></td>
-    <td class="muted">${t.member||''}</td>
-    <td><span class="badge ${t.type}">${t.type}</span></td>
-    <td style="text-align:right">${t.qty?t.qty.toLocaleString('en-IN',{maximumFractionDigits:4}):''}</td>
-    <td style="text-align:right">${t.price?'₹'+t.price.toFixed(2):''}</td>
-    <td style="text-align:right" class="${t.type==='Sell'||t.type==='Dividend'?'up':''}">${t.amount?inrK(Math.abs(t.amount)):''}</td>
+    <td style="${p};white-space:nowrap;color:var(--text2);font-size:11px">${fd(t.date)}</td>
+    <td style="${p};font-size:11.5px"><b>${t.scrip}</b></td>
+    <td style="${p};font-size:10.5px;color:var(--text3)">${t.member||''}</td>
+    <td style="${p}"><span class="badge ${t.type}" style="font-size:10px;padding:1px 5px">${t.type}</span></td>
+    <td style="${p};text-align:right;font-size:11px;font-variant-numeric:tabular-nums">${t.qty?t.qty.toLocaleString('en-IN',{maximumFractionDigits:2}):''}</td>
+    <td style="${p};text-align:right;font-size:11px;font-variant-numeric:tabular-nums">${t.price?'₹'+t.price.toFixed(2):''}</td>
+    <td style="${p};text-align:right;font-size:11px;font-variant-numeric:tabular-nums" class="${t.type==='Sell'||t.type==='Dividend'?'up':''}">${t.amount?inrK(Math.abs(t.amount)):''}</td>
   </tr>`).join('');
 }
 
@@ -884,21 +909,17 @@ function renderCharts(){
   const{months:allRows,irrLine}=computeM(tl);
   if(!allRows.length){
     document.getElementById('chart-legend').textContent='No data — upload transactions and refresh prices.';
+    document.getElementById('mom-body').innerHTML='<tr><td colspan="9" style="padding:16px;text-align:center;color:var(--text3)">No data</td></tr>';
     return;
   }
 
-  // Apply range selector
   const n=parseInt(document.getElementById('chart-range')?.value||'0');
-
-  // Apply date slider
   const slStart=parseInt(document.getElementById('dr-start')?.value||'0');
   const slEnd  =parseInt(document.getElementById('dr-end')?.value||'100');
   const si=Math.floor(slStart/100*(allRows.length-1));
   const ei=Math.min(Math.floor(slEnd/100*(allRows.length-1)),allRows.length-1);
   let data=allRows.slice(si,ei+1);
   if(n>0&&data.length>n)data=data.slice(-n);
-
-  // Update slider labels
   if(data.length){
     document.getElementById('dr-from').textContent=data[0].label;
     document.getElementById('dr-to').textContent=data[data.length-1].label;
@@ -908,32 +929,35 @@ function renderCharts(){
   const tc=dk?'#a09e96':'#66665f';const gc=dk?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)';
   const labs=data.map(r=>r.label);
 
-  // Build waterfall bars:
-  // Each month: investment (blue up), redemption (orange down), dividend (teal up), mkt move (green/red)
-  const invBars=data.map(r=>r.buy?[r.openVal||0,(r.openVal||0)+r.buy]:null);
-  const selBars=data.map(r=>r.sell?[(r.openVal||0)+r.buy-r.sell,(r.openVal||0)+r.buy]:null);
+  // Net cashflow bar: positive netFlow → invest (blue up from openVal)
+  //                   negative netFlow → redeem (orange down from openVal)
+  const netFlowBars=data.map(r=>{
+    if(!r.netFlow)return null;
+    const base=r.openVal||0;
+    return r.netFlow>0?[base,base+r.netFlow]:[base+r.netFlow,base];
+  });
+  const netFlowColors=data.map(r=>r.netFlow>0?'rgba(24,95,165,0.6)':'rgba(180,80,14,0.6)');
   const divBars=data.map(r=>r.div?[r.openVal||0,(r.openVal||0)+r.div]:null);
   const gainBars=data.map(r=>(r.mktMove!=null&&r.mktMove>0)?[(r.closeVal||0)-r.mktMove,r.closeVal]:null);
   const lossBars=data.map(r=>(r.mktMove!=null&&r.mktMove<0)?[r.closeVal,(r.closeVal||0)-r.mktMove]:null);
   const closeLine=data.map(r=>r.closeVal);
-  const irrSlice=irrLine?irrLine.slice(si,ei+1).slice(n>0?-n:undefined):[];
+  const irrSlice=irrLine.slice(allRows.indexOf(data[0]),allRows.indexOf(data[0])+data.length);
 
   document.getElementById('chart-legend').innerHTML=
-    '<span style="color:rgba(24,95,165,0.9)">■ Invest</span> '+
-    '<span style="color:rgba(154,80,14,0.9)">■ Redeem</span> '+
-    '<span style="color:rgba(11,96,72,0.9)">■ Dividend</span> '+
-    '<span style="color:rgba(45,107,14,0.9)">■ Mkt gain</span> '+
-    '<span style="color:rgba(154,40,40,0.9)">■ Mkt loss</span> '+
-    '<span style="color:rgba(24,95,165,0.7)">— Value</span> '+
-    (irrSlice.some(v=>v!=null)?'<span style="color:rgba(180,100,0,0.9)">-- IRR %</span>':'');
+    '<span style="color:rgba(24,95,165,0.85)">■ Net invest</span> &nbsp;'+
+    '<span style="color:rgba(180,80,14,0.85)">■ Net redeem</span> &nbsp;'+
+    '<span style="color:rgba(11,96,72,0.85)">■ Dividend</span> &nbsp;'+
+    '<span style="color:rgba(45,107,14,0.85)">■ Mkt gain</span> &nbsp;'+
+    '<span style="color:rgba(154,40,40,0.85)">■ Mkt loss</span> &nbsp;'+
+    '<span style="color:rgba(24,95,165,0.7)">— Value</span>'+
+    (irrSlice.some(v=>v!=null)?' &nbsp;<span style="color:rgba(180,100,0,0.9)">-- IRR %</span>':'');
 
   if(mC)mC.destroy();
   const datasets=[
-    {label:'Investment',data:invBars,backgroundColor:'rgba(24,95,165,0.55)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:4},
-    {label:'Redemption',data:selBars,backgroundColor:'rgba(154,80,14,0.55)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:3},
-    {label:'Dividend',data:divBars,backgroundColor:'rgba(11,96,72,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:3},
-    {label:'Mkt gain',data:gainBars,backgroundColor:'rgba(45,107,14,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:2},
-    {label:'Mkt loss',data:lossBars,backgroundColor:'rgba(154,40,40,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.75,order:2},
+    {label:'Net cashflow',data:netFlowBars,backgroundColor:netFlowColors,borderWidth:0,borderRadius:2,barPercentage:0.7,order:4},
+    {label:'Dividend',data:divBars,backgroundColor:'rgba(11,96,72,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.7,order:3},
+    {label:'Mkt gain',data:gainBars,backgroundColor:'rgba(45,107,14,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.7,order:2},
+    {label:'Mkt loss',data:lossBars,backgroundColor:'rgba(154,40,40,0.6)',borderWidth:0,borderRadius:2,barPercentage:0.7,order:2},
     {label:'Portfolio value',type:'line',data:closeLine,borderColor:'rgba(24,95,165,0.7)',borderWidth:2,pointRadius:0,fill:false,tension:.3,order:0,spanGaps:true,yAxisID:'y'},
   ];
   if(irrSlice.some(v=>v!=null)){
@@ -941,48 +965,55 @@ function renderCharts(){
   }
 
   mC=new Chart(document.getElementById('mc').getContext('2d'),{
-    type:'bar',
-    data:{labels:labs,datasets},
+    type:'bar',data:{labels:labs,datasets},
     options:{
       responsive:true,maintainAspectRatio:false,
       parsing:{xAxisKey:'x',yAxisKey:'y'},
       interaction:{intersect:false,mode:'index'},
-      plugins:{
-        legend:{display:false},
-        tooltip:{callbacks:{
-          label:ctx=>{
-            const v=ctx.raw;
-            if(Array.isArray(v))return`  ${ctx.dataset.label}: ${inrK(Math.abs(v[1]-v[0]))}`;
-            return v!=null?`  ${ctx.dataset.label}: ${ctx.dataset.yAxisID==='y2'?v+'%':inrK(v)}`:'';
+      plugins:{legend:{display:false},tooltip:{callbacks:{
+        label:ctx=>{
+          const v=ctx.raw;
+          if(Array.isArray(v)){
+            const amt=Math.abs(v[1]-v[0]);
+            const lbl=ctx.dataset.label==='Net cashflow'?(v[1]>v[0]?'Net invest':'Net redeem'):ctx.dataset.label;
+            return`  ${lbl}: ${inrK(amt)}`;
           }
-        }}
-      },
+          return v!=null?`  ${ctx.dataset.label}: ${ctx.dataset.yAxisID==='y2'?v+'%':inrK(v)}`:'';
+        }
+      }}},
       scales:{
         x:{ticks:{color:tc,font:{size:10},maxTicksLimit:18},grid:{color:gc}},
-        y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(v)},grid:{color:gc},stacked:false},
+        y:{ticks:{color:tc,font:{size:10},callback:v=>inrK(v)},grid:{color:gc}},
         y2:{position:'right',ticks:{color:'rgba(180,100,0,0.8)',font:{size:9},callback:v=>v+'%'},grid:{display:false},display:irrSlice.some(v=>v!=null)},
       }
     }
   });
 
-  // ── MoM table ────────────────────────────────────────────────
+  // ── MoM table ─────────────────────────────────────────────────
+  const p2=s=>`padding:3px 6px;border-bottom:0.5px solid var(--border);${s||''}`;
+  const ra=p2('text-align:right');
   const fmt=v=>v!=null&&v!==0?(v>0?'<span class="up">+'+inrK(v)+'</span>':'<span class="dn">'+inrK(v)+'</span>'):'—';
-  const fmtV=v=>v!=null?inrK(v):'—';
   const tbody=document.getElementById('mom-body');
   const tableRows=data.filter(r=>r.buy||r.sell||r.div||r.closeVal);
-  if(!tableRows.length){tbody.innerHTML='<tr><td colspan="8" style="padding:16px;text-align:center;color:var(--text3)">No data</td></tr>';return;}
-  tbody.innerHTML=tableRows.map((r,i)=>{
-    const irr=irrSlice[data.indexOf(r)];
+  if(!tableRows.length){tbody.innerHTML='<tr><td colspan="9" style="padding:16px;text-align:center;color:var(--text3)">Refresh prices to see monthly data</td></tr>';return;}
+  tbody.innerHTML=tableRows.map(r=>{
+    const ri=allRows.indexOf(r);
+    const irr=ri>=0&&ri<irrSlice.length?irrSlice[ri]:null;
     const irrCell=irr!=null?`<span class="${irr>=0?'up':'dn'}">${irr>0?'+':''}${irr}%</span>`:'—';
+    const netLabel=r.netFlow>0?`<span class="up">+${inrK(r.netFlow)}</span>`:r.netFlow<0?`<span class="dn">${inrK(r.netFlow)}</span>`:'—';
+    // Closing price for scrip filter (single scrip) or blank for portfolio
+    const cfScrip=document.getElementById('cf-scrip')?.value||'';
+    const closePx=cfScrip?prices[toYF(cfScrip)]?.history?.[r.mon]??prices[toYF(cfScrip)]?.current:null;
+    const cxCell=closePx?'₹'+closePx.toFixed(2):'—';
     return`<tr>
-      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);white-space:nowrap">${r.label}</td>
-      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${fmtV(r.openVal||0)}</td>
-      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${r.buy?'<span class="up">'+inrK(r.buy)+'</span>':'—'}</td>
-      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${r.sell?'<span class="dn">'+inrK(r.sell)+'</span>':'—'}</td>
-      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${r.div?'<span class="up">'+inrK(r.div)+'</span>':'—'}</td>
-      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${fmt(r.mktMove)}</td>
-      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right;font-weight:500">${fmtV(r.closeVal)}</td>
-      <td style="padding:4px 8px;border-bottom:0.5px solid var(--border);text-align:right">${irrCell}</td>
+      <td style="${p2('white-space:nowrap')}">${r.label}</td>
+      <td style="${ra}">${inrK(r.openVal||0)}</td>
+      <td style="${ra}">${netLabel}</td>
+      <td style="${ra}">${r.div?'<span class="up">'+inrK(r.div)+'</span>':'—'}</td>
+      <td style="${ra}">${fmt(r.mktMove)}</td>
+      <td style="${ra}">${cxCell}</td>
+      <td style="${ra};font-weight:500">${r.closeVal!=null?inrK(r.closeVal):'—'}</td>
+      <td style="${ra}">${irrCell}</td>
     </tr>`;
   }).join('');
 }
@@ -1018,11 +1049,47 @@ function dlAll(){
 async function delBatch(id){
   if(!confirm('Delete this batch? These transactions will be removed from the portfolio.'))return;
   batches=batches.filter(b=>b.id!==id);
+  // Rebuild txns strictly from remaining batches — no other source
   txns=batches.flatMap(b=>b.txns).sort((a,b)=>a.date>b.date?1:-1);
-  if(bToken){await bDel(`batch_${id}.json`);await bSave('batches_index.json',batches.map(b=>({id:b.id,name:b.name,member:b.member,date:b.date,count:b.count})));}
-  updateUC();renderMPills();renderUH();renderAll();toast('Batch deleted ✓','ok');
+  if(bToken){
+    // Delete the batch file AND update the index
+    await bDel(`batch_${id}.json`);
+    await bSave('batches_index.json',batches.map(b=>({id:b.id,name:b.name,member:b.member,date:b.date,count:b.count})));
+    toast(`Batch deleted from Box ✓ — ${txns.length} transactions remain`,'ok');
+  }else{
+    toast(`Batch removed — ${txns.length} transactions remain`,'ok');
+  }
+  updateUC();renderMPills();renderUH();renderAll();
 }
 function updateUC(){document.getElementById('uc').textContent=batches.length||'0';}
+
+// Deduplicate transactions across batches: same date+scrip+type+qty+member = duplicate
+function dedupTxns(list){
+  const seen=new Set();
+  return list.filter(t=>{
+    // Use a fingerprint that identifies the economic event
+    const key=`${t.date}|${t.scrip}|${t.type}|${t.member}|${Math.round(t.qty*100)}|${Math.round(Math.abs(t.amount))}`;
+    if(seen.has(key))return false;
+    seen.add(key);return true;
+  });
+}
+
+async function cleanDuplicates(){
+  const before=txns.length;
+  const clean=dedupTxns(txns);
+  const removed=before-clean.length;
+  if(!removed){toast('No duplicates found ✓','ok');return;}
+  // Rebuild batches to remove duped txns
+  const cleanIds=new Set(clean.map(t=>t.id));
+  batches=batches.map(b=>({...b,txns:b.txns.filter(t=>cleanIds.has(t.id)),count:b.txns.filter(t=>cleanIds.has(t.id)).length})).filter(b=>b.count>0);
+  txns=clean;
+  if(bToken){
+    for(const b of batches)await bSave(`batch_${b.id}.json`,b);
+    await bSave('batches_index.json',batches.map(b=>({id:b.id,name:b.name,member:b.member,date:b.date,count:b.count})));
+  }
+  updateUC();renderMPills();renderUH();renderAll();
+  toast(`Removed ${removed} duplicate transactions ✓`,'ok');
+}
 
 // ── ISIN ─────────────────────────────────────────────────────
 function autoFill(){
@@ -1356,9 +1423,11 @@ function escH(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').r
 
 async function saveISIN(){
   if(!bToken){toast('Box not connected — data is in browser localStorage. Connect Box (⚙) to sync to cloud permanently.','error',6000);return;}
+  // Saves full isinMap including scrip, isin, yahoo, nse, bse, status
   await bSave('isin_map.json',isinMap);
   saveISINLocal();
-  toast('ISIN map saved to Box ✓ — loads automatically on every visit','ok');
+  const withSym=isinMap.filter(r=>r.yahoo).length;
+  toast(`ISIN map saved to Box ✓ — ${isinMap.length} scrips, ${withSym} with Yahoo symbol. Loads automatically every visit.`,'ok',5000);
 }
 
 function dlISINMap(){
@@ -1424,7 +1493,7 @@ async function init(){
       if(idx?.length){
         toast('Loading batches…','info',0);batches=[];
         for(const b of idx){const full=await bLoad(`batch_${b.id}.json`);if(full)batches.push(full);}
-        txns=batches.flatMap(b=>b.txns).sort((a,b)=>a.date>b.date?1:-1);
+        txns=dedupTxns(batches.flatMap(b=>b.txns).sort((a,b)=>a.date>b.date?1:-1));
         toast(`${txns.length} transactions loaded ✓`,'ok');
       }
       const pc=await bLoad('prices.json');
